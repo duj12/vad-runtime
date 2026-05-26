@@ -31,12 +31,13 @@ private:
     void LoadCmvn(const std::string& cmvn_path);
     void LoadConfig(const std::string& config_path);
     void InitCache();
-    void InitOnline();
+    void ResetCache();
 
     // 特征提取与预处理
-    void ExtractFbank(const std::vector<float>& pcm_float, std::vector<std::vector<float>>& feats);
-    void LfrCmvn(std::vector<std::vector<float>>& feats);
-    int OnlineLfrCmvn(std::vector<std::vector<float>>& feats, bool is_final);
+    void FbankKaldi(const std::vector<float>& waves, std::vector<std::vector<float>>& vad_feats);
+    void ExtractFeats(std::vector<std::vector<float>>& vad_feats, std::vector<float>& waves, bool input_finished);
+    int OnlineLfrCmvn(std::vector<std::vector<float>>& vad_feats, bool input_finished);
+    static int ComputeFrameNum(int sample_length, int frame_sample_length, int frame_shift_sample_length);
 
     // 模型推理
     void Forward(const std::vector<std::vector<float>>& feats,
@@ -63,8 +64,6 @@ private:
     rknn_input_output_num io_num_;
     std::vector<rknn_tensor_attr> input_attrs_;
     std::vector<rknn_tensor_attr> output_attrs_;
-    std::vector<rknn_tensor_mem> input_mems_;
-    std::vector<rknn_tensor_mem> output_mems_;
 #endif
 
     // Fbank特征提取
@@ -74,11 +73,11 @@ private:
     std::vector<float> means_;
     std::vector<float> vars_;
 
-    // 推理缓存
+    // 推理缓存 (4层, 每层[128, 19, 1], 扁平化为128*19=2432)
     std::vector<std::vector<float>> in_cache_;
     std::vector<float> reserve_waveforms_;
-    std::vector<float> input_cache_;
-    std::vector<std::vector<float>> lfr_splice_cache_;
+    std::vector<float> input_cache_;           // 音频采样缓存 (float, 用于跨块音频拼接)
+    std::vector<std::vector<float>> lfr_splice_cache_;  // LFR特征缓存
 
     // VAD端点检测
     E2EVadModel vad_scorer_;

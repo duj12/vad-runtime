@@ -1,11 +1,14 @@
 /**
- * FSMN VAD RKNN后端示例
- * 输入：16kHz采样率，16bit位深，单声道PCM原始音频
- * 输出：检测到的语音段起止时间(毫秒)
+ * FSMN VAD RKNN后端示例 — 流式每帧状态输出
+ *
+ * 输入：任意长度 16kHz 16bit 单声道 PCM
+ * 输出：状态变化时打印（NONE/BEGIN/CONTINUE/END），跳过连续相同的状态
  */
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <chrono>
+#include <string>
 #include "vad.h"
 
 int main(int argc, char* argv[]) {
@@ -18,14 +21,13 @@ int main(int argc, char* argv[]) {
     const char* model_dir = argv[1];
     const char* pcm_file = argv[2];
 
-    // 初始化VAD，使用RKNN后端
     void* vad_handle = vad_init(model_dir, 16000, VAD_BACKEND_RKNN);
     if (!vad_handle) {
-        std::cerr << "Failed to init VAD with RKNN backend" << std::endl;
+        std::cerr << "Failed to init VAD" << std::endl;
         return -1;
     }
 
-    std::cout << "VAD initialized, backend: RKNN NPU" << std::endl;
+    std::cout << "VAD initialized, backend: " << vad_get_backend(vad_handle) << std::endl;
 
     // 读取PCM文件
     std::ifstream is(pcm_file, std::ios::binary);
@@ -35,7 +37,6 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    // 获取文件大小
     is.seekg(0, std::ios::end);
     size_t file_size = is.tellg();
     is.seekg(0, std::ios::beg);
@@ -45,42 +46,85 @@ int main(int argc, char* argv[]) {
     is.read(reinterpret_cast<char*>(pcm_data.data()), file_size);
     is.close();
 
-    std::cout << "Read " << pcm_len << " samples, duration: " << (float)pcm_len / 16000 << "s" << std::endl;
+    int total_dur_ms = (int)(pcm_len * 1000 / 16000);
+    std::cout << "Read " << pcm_len << " samples, duration: " << total_dur_ms << "ms" << std::endl;
+    std::cout << std::endl;
 
-    // 流式处理：每次处理300ms的音频
-    const int chunk_size = 16000 * 0.3;  // 300ms = 4800 samples
+    // 首帧必须超过WindowDetector(200ms窗口)，后续60ms步长
+    const int chunk_size_first = 5760;  // 360ms (36 LFR帧，确保WindowDetector一次确认)
+    const int chunk_size = 960;         // 60ms at 16kHz
     int pos = 0;
-    int total_segments = 0;
+    int chunk_ms = 0;
+    bool in_speech = false;
 
-    while (pos < pcm_len) {
-        int current_chunk = std::min(chunk_size, (int)(pcm_len - pos));
-        bool is_final = (pos + current_chunk) >= pcm_len;
+    int last_status = -1;
+    double total_infer_ms = 0.0;
+
+    while (pos < (int)pcm_len) {
+        bool is_first = (pos == 0);
+        int first_chunk_limit = is_first ? chunk_size_first : chunk_size;
+        int current_chunk = std::min(first_chunk_limit, (int)(pcm_len - pos));
+        bool is_final = (pos + current_chunk) >= (int)pcm_len;
+
+        auto start = std::chrono::high_resolution_clock::now();
 
         int* segments = nullptr;
         int segments_len = 0;
+        (void)vad_process(vad_handle, pcm_data.data() + pos, current_chunk,
+                          is_final, &segments, &segments_len);
 
-        int ret = vad_process(vad_handle, pcm_data.data() + pos, current_chunk, is_final, &segments, &segments_len);
-        if (ret != 0) {
-            std::cerr << "Failed to process audio, error: " << ret << std::endl;
-            break;
+        auto end = std::chrono::high_resolution_clock::now();
+        double infer_ms = std::chrono::duration<double, std::milli>(end - start).count();
+        total_infer_ms += infer_ms;
+
+        bool got_begin = false, got_end = false;
+        int begin_ms = 0, end_ms = 0;
+        for (int i = 0; i < segments_len; i++) {
+            int s = segments[i * 2], e = segments[i * 2 + 1];
+            if (s >= 0 && e < 0) { got_begin = true; begin_ms = s; }
+            else if (s < 0 && e >= 0) { got_end = true; end_ms = e; }
+            else if (s >= 0 && e >= 0) { got_begin = true; begin_ms = s; got_end = true; end_ms = e; }
         }
 
-        if (segments_len > 0) {
-            total_segments += segments_len;
-            for (int i = 0; i < segments_len; ++i) {
-                int start = segments[i * 2];
-                int end = segments[i * 2 + 1];
-                std::cout << "Segment: " << start << "ms - " << end << "ms, duration: " << (end - start) << "ms" << std::endl;
-            }
+        int cur_status;
+        const char* status_str = "";
+        if (got_begin) {
+            cur_status = 1;
+            status_str = "BEGIN";
+            in_speech = true;
+        } else if (got_end) {
+            cur_status = 3;
+            status_str = "END";
+            in_speech = false;
+        } else if (in_speech) {
+            cur_status = 2;
+            status_str = "CONTINUE";
+        } else {
+            cur_status = 0;
+            status_str = "NONE";
         }
 
-        vad_free_segments(segments);
+        std::string seg_str;
+        for (int i = 0; i < segments_len; i++) {
+            if (!seg_str.empty()) seg_str += " ";
+            seg_str += "[" + std::to_string(segments[i*2]) + "," + std::to_string(segments[i*2+1]) + "]";
+        }
+
+        if (cur_status != last_status && cur_status >= 0) {
+            printf("%4dms: %s    %.3f", chunk_ms, status_str, total_infer_ms / (chunk_ms + current_chunk * 1000 / 16000));
+            if (!seg_str.empty()) printf("    %s", seg_str.c_str());
+            printf("\n");
+            last_status = cur_status;
+        }
+
+        chunk_ms += current_chunk * 1000 / 16000;
         pos += current_chunk;
+        vad_free_segments(segments);
     }
 
-    std::cout << "Process completed, total " << total_segments << " segments detected" << std::endl;
+    printf("\n=== Summary ===\n");
+    printf("RTF: %.3f\n", total_infer_ms / total_dur_ms);
 
-    // 释放资源
     vad_destroy(vad_handle);
     return 0;
 }
