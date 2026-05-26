@@ -1,13 +1,13 @@
 # FSMN VAD 库
 
-基于FSMN模型的语音活动检测(VAD)库，支持 ONNX Runtime CPU 推理，预留 RKNN NPU 加速接口。
+基于FSMN模型的语音活动检测(VAD)库，支持 ONNX Runtime CPU 和 RKNN NPU（RK3588）双后端推理。
 
 ## 特性
 
 - 高精度：基于FSMN模型的VAD
 - 流式处理：支持实时流式音频输入
 - 轻量级：最小依赖，仅需要 ONNX Runtime 和 kaldi-native-fbank
-- 双后端：支持 ONNX Runtime CPU 和 RKNN NPU（预留）
+- 双后端：支持 ONNX Runtime CPU 和 RKNN NPU（RK3588）
 - 纯净 C API：易于集成到各种语言和框架
 
 ## 项目结构
@@ -18,13 +18,13 @@ vad-runtime/
 │   ├── vad.h              # 对外C API
 │   ├── vad_model.h        # VAD模型抽象接口
 │   ├── fsmn_vad_onnx.h    # ONNX后端实现
-│   ├── fsmn_vad_rknn.h    # RKNN后端实现（预留）
+│   ├── fsmn_vad_rknn.h    # RKNN NPU后端实现
 │   ├── e2e_vad.h          # 端点检测状态机（header-only）
 │   └── common.h           # 公共定义与常量
 ├── src/                   # 源文件
 │   ├── vad.cpp            # C API实现
 │   ├── fsmn_vad_onnx.cpp  # ONNX Runtime推理核心
-│   └── fsmn_vad_rknn.cpp  # RKNN后端实现（预留）
+│   └── fsmn_vad_rknn.cpp  # RKNN NPU推理核心
 ├── third_party/
 │   ├── kaldi-native-fbank/ # Fbank特征提取（源码）
 │   └── onnxruntime/        # ONNX Runtime（需自行下载）
@@ -34,7 +34,7 @@ vad-runtime/
 │   └── config.yaml        # 模型配置
 ├── examples/
 │   ├── demo_onnx.cpp      # ONNX后端使用示例
-│   ├── demo_rknn.cpp      # RKNN后端使用示例（预留）
+│   ├── demo_rknn.cpp      # RKNN后端使用示例
 │   ├── xmov.raw           # 测试音频（16kHz, 16bit, 单声道）
 │   └── xmov.wav           # 测试音频WAV格式
 └── CMakeLists.txt         # CMake编译配置
@@ -47,7 +47,7 @@ vad-runtime/
 - CMake 3.16+
 - C++14 编译器
 - ONNX Runtime 1.16.3（下载后放到 `third_party/onnxruntime/`）
-- RKNN SDK（可选，用于RKNN后端）
+- RKNN SDK（可选，[RKNN NPU后端](docs/RKNN_GUIDE.md)需要）
 
 ### ONNX Runtime 下载
 
@@ -170,7 +170,7 @@ vad_destroy(handle);
 typedef enum {
     VAD_BACKEND_AUTO = 0,  // 自动选择（目前等同ONNX）
     VAD_BACKEND_ONNX = 1,  // ONNX Runtime CPU
-    VAD_BACKEND_RKNN = 2   // RKNN NPU（预留）
+    VAD_BACKEND_RKNN = 2   // RKNN NPU（RK3588）
 } VadBackendType;
 ```
 
@@ -238,13 +238,48 @@ model/
 
 Kaldi 文本格式，包含 `<AddShift>`（负均值）和 `<Rescale>`（缩放因子）两部分，每部分 400 个 float 值（80维fbank × 5帧拼接）。
 
-## RKNN 后端（预留）
+## RKNN NPU 后端
 
-RKNN NPU后端接口已预留，当前实现为 stub。如需启用：
+RKNN 后端通过 RK3588 NPU 加速 VAD 推理，延迟约 0.3ms/chunk（远低于 ONNX CPU 的 ~2ms）。
 
-1. 安装 [RKNN Toolkit2](https://github.com/rockchip-linux/rknn-toolkit2)
-2. 将 ONNX 模型转换为 RKNN 格式
-3. 设置 `-DENABLE_RKNN=ON -DRKNN_SDK_DIR=/path/to/rknn_sdk` 编译
+完整流程（模型转换 → 模拟器验证 → 交叉编译 → 板端部署）见 **[docs/RKNN_GUIDE.md](docs/RKNN_GUIDE.md)**。
+
+### 快速路线图
+
+```bash
+# 1. ONNX 导出（在 FunASR 环境中）
+python tools/export_onnx.py                    # → model/model.onnx
+
+# 2. 转换为 RKNN（在 rknn-toolkit2 环境中）
+python tools/convert_onnx_to_rknn.py model/model.onnx model/model.rknn
+
+# 3. PC 模拟器基准测试（验证正确性与速度）
+python tools/benchmark_rknn.py --no-verify
+
+# 4. aarch64 交叉编译
+mkdir build-arm64 && cd build-arm64
+cmake .. -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+         -DENABLE_ONNX=OFF -DENABLE_RKNN=ON \
+         -DRKNN_SDK_DIR=/path/to/rknn_sdk
+make -j4
+
+# 5. 板端运行
+scp build-arm64/vad_example_rknn rk3588:/home/root/vad/
+scp model/model.rknn rk3588:/home/root/vad/model/
+# ... 详见 docs/RKNN_GUIDE.md
+```
+
+### 模型文件
+
+RKNN 后端使用 `model.rknn`（FP32，约 1.3MB），而非 ONNX 的 `model_quant.onnx`。模型目录需包含：
+
+```
+model/
+├── model.rknn      # RKNN 模型（由 model.onnx 转换）
+├── am.mvn          # CMVN 参数（Kaldi 文本格式，ONNX/RKNN 共用）
+└── config.yaml     # 模型配置（ONNX/RKNN 共用）
+```
 
 ## 流式输出说明
 
