@@ -19,7 +19,7 @@ endif()
 
 # 包含目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/)
 
 # 第三方依赖：kaldi-native-fbank
 file(GLOB KNF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank/csrc/*.cc ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank/csrc/*.c)
@@ -45,22 +45,28 @@ target_link_libraries(fsmn_vad PUBLIC knf)
 # 添加编译宏
 if (ENABLE_ONNX)
     target_compile_definitions(fsmn_vad PUBLIC ENABLE_ONNX)
-    # 查找ONNX Runtime
+    # 查找ONNX Runtime，优先使用项目third_party下的
     if (NOT DEFINED ONNXRUNTIME_DIR)
-        if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-aarch64-1.16.3.tgz")
+        set(LOCAL_ONNX_RUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime)
+        if (EXISTS ${LOCAL_ONNX_RUNTIME_DIR} AND EXISTS ${LOCAL_ONNX_RUNTIME_DIR}/include/onnxruntime_cxx_api.h)
+            set(ONNXRUNTIME_DIR ${LOCAL_ONNX_RUNTIME_DIR})
+            message(STATUS "Using local ONNX Runtime from ${ONNXRUNTIME_DIR}")
         else()
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz")
+            if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-aarch64-1.16.3.tgz")
+            else()
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz")
+            endif()
+            message(STATUS "Downloading ONNX Runtime from ${ONNXRUNTIME_URL}")
+            include(FetchContent)
+            FetchContent_Declare(
+                onnxruntime
+                URL ${ONNXRUNTIME_URL}
+                DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}/downloads
+            )
+            FetchContent_MakeAvailable(onnxruntime)
+            set(ONNXRUNTIME_DIR ${onnxruntime_SOURCE_DIR})
         endif()
-        message(STATUS "Downloading ONNX Runtime from ${ONNXRUNTIME_URL}")
-        include(FetchContent)
-        FetchContent_Declare(
-            onnxruntime
-            URL ${ONNXRUNTIME_URL}
-            DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}/downloads
-        )
-        FetchContent_MakeAvailable(onnxruntime)
-        set(ONNXRUNTIME_DIR ${onnxruntime_SOURCE_DIR})
     endif()
     include_directories(${ONNXRUNTIME_DIR}/include)
     target_link_directories(fsmn_vad PUBLIC ${ONNXRUNTIME_DIR}/lib)

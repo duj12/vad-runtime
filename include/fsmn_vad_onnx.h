@@ -3,9 +3,8 @@
 
 #include "vad_model.h"
 #include "e2e_vad.h"
-#include "feature_fbank.h"
+#include "kaldi-native-fbank/csrc/feature-fbank.h"
 #include <onnxruntime_cxx_api.h>
-#include <yaml-cpp/yaml.h>
 #include <memory>
 
 namespace vad {
@@ -31,9 +30,15 @@ private:
     void InitOnline();
 
     // 特征提取与预处理
-    void ExtractFbank(const std::vector<float>& pcm_float, std::vector<std::vector<float>>& feats);
-    void LfrCmvn(std::vector<std::vector<float>>& feats);
-    int OnlineLfrCmvn(std::vector<std::vector<float>>& feats, bool is_final);
+    void FbankKaldi(const std::vector<float>& waves, std::vector<std::vector<float>>& vad_feats);
+    void ExtractFeats(std::vector<std::vector<float>>& vad_feats, std::vector<float>& waves, bool input_finished);
+    int OnlineLfrCmvn(std::vector<std::vector<float>>& vad_feats, bool input_finished);
+    static int ComputeFrameNum(int sample_length, int frame_sample_length, int frame_shift_sample_length);
+    void ResetCache() {
+        reserve_waveforms_.clear();
+        input_cache_.clear();
+        lfr_splice_cache_.clear();
+    }
 
     // 模型推理
     void Forward(const std::vector<std::vector<float>>& feats,
@@ -70,11 +75,11 @@ private:
     std::vector<float> means_;
     std::vector<float> vars_;
 
-    // 推理缓存
+    // 推理缓存 (4层, 每层[128, 19, 1], 扁平化为128*19=2432)
     std::vector<std::vector<float>> in_cache_;
     std::vector<float> reserve_waveforms_;
-    std::vector<float> input_cache_;
-    std::vector<std::vector<float>> lfr_splice_cache_;
+    std::vector<float> input_cache_;           // 音频采样缓存 (float, 用于跨块音频拼接)
+    std::vector<std::vector<float>> lfr_splice_cache_;  // LFR特征缓存
 
     // VAD端点检测
     E2EVadModel vad_scorer_;

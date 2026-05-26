@@ -44,6 +44,10 @@ void* vad_init(const char* model_dir, int sample_rate, VadBackendType backend) {
     try {
         model->Init(model_dir, sample_rate);
         return model;
+    } catch (const std::exception& e) {
+        fprintf(stderr, "VAD init exception: %s\n", e.what());
+        delete model;
+        return nullptr;
     } catch (...) {
         delete model;
         return nullptr;
@@ -76,6 +80,9 @@ int vad_process(void* handle, const short* pcm_data, int pcm_len, bool is_final,
             (*out_segments)[i * 2 + 1] = segments[i].second;
         }
         return 0;
+    } catch (const std::exception& e) {
+        fprintf(stderr, "VAD process exception: %s\n", e.what());
+        return -3;
     } catch (...) {
         return -3;
     }

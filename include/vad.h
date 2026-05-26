@@ -5,6 +5,12 @@
 #include <vector>
 #include <utility>
 
+// 导入VadBackendType到全局命名空间，方便C接口使用
+using vad::VadBackendType;
+using vad::VAD_BACKEND_AUTO;
+using vad::VAD_BACKEND_ONNX;
+using vad::VAD_BACKEND_RKNN;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

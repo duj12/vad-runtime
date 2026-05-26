@@ -3,7 +3,7 @@
 
 #include "vad_model.h"
 #include "e2e_vad.h"
-#include "feature_fbank.h"
+#include "kaldi-native-fbank/csrc/feature-fbank.h"
 #include <memory>
 
 // RKNN SDK 头文件，编译时需要指定RKNN SDK路径

@@ -51,6 +51,7 @@ int main(int argc, char* argv[]) {
     const int chunk_size = 16000 * 0.3;  // 300ms = 4800 samples
     int pos = 0;
     int total_segments = 0;
+    std::vector<std::pair<int, int>> all_segments;
 
     while (pos < pcm_len) {
         int current_chunk = std::min(chunk_size, (int)(pcm_len - pos));
@@ -70,7 +71,7 @@ int main(int argc, char* argv[]) {
             for (int i = 0; i < segments_len; ++i) {
                 int start = segments[i * 2];
                 int end = segments[i * 2 + 1];
-                std::cout << "Segment: " << start << "ms - " << end << "ms, duration: " << (end - start) << "ms" << std::endl;
+                all_segments.emplace_back(start, end);
             }
         }
 
@@ -78,7 +79,13 @@ int main(int argc, char* argv[]) {
         pos += current_chunk;
     }
 
-    std::cout << "Process completed, total " << total_segments << " segments detected" << std::endl;
+    // 按照funasr-onnx-online-vad.cpp格式输出: wav_id: [[start,end],[start,end]]
+    std::cout << pcm_file << ": [";
+    for (size_t i = 0; i < all_segments.size(); ++i) {
+        if (i > 0) std::cout << ",";
+        std::cout << "[" << all_segments[i].first << "," << all_segments[i].second << "]";
+    }
+    std::cout << "]" << std::endl;
 
     // 释放资源
     vad_destroy(vad_handle);

@@ -29,7 +29,7 @@ namespace vad {
 #endif
 
 // 模型文件名
-#define MODEL_NAME "model.onnx"       // ONNX格式模型
+#define MODEL_NAME "model_quant.onnx" // ONNX格式模型
 #define RKNN_MODEL_NAME "model.rknn"  // RKNN格式模型
 #define VAD_CMVN_NAME "am.mvn"        // 归一化参数
 #define VAD_CONFIG_NAME "config.yaml" // 配置文件
