@@ -1,6 +1,6 @@
 # FSMN VAD 库
 
-基于FSMN模型的语音活动检测(VAD)库，从原始 online-vad 推理代码剥离，去除 ffmpeg 等无关依赖，仅保留核心 VAD 功能。支持 ONNX Runtime CPU 推理，预留 RKNN NPU 加速接口。
+基于FSMN模型的语音活动检测(VAD)库，支持 ONNX Runtime CPU 推理，预留 RKNN NPU 加速接口。
 
 ## 特性
 
@@ -221,7 +221,7 @@ model/
 |------|------|--------|
 | `speech_noise_thres` | 语音/噪声判断阈值 | 0.6 |
 | `max_end_silence_time` | 尾部静音超时(ms) | 800 |
-| `max_single_segment_time` | 最大单段长度(ms) | 20000 |
+| `max_single_segment_time` | 最大单段长度(ms) | 60000 |
 | `decibel_thres` | 分贝阈值 | -100.0 |
 | `snr_thres` | 信噪比阈值 | -100.0 |
 
