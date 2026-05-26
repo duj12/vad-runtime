@@ -102,19 +102,30 @@ cd build
 LD_LIBRARY_PATH=. ./vad_example_onnx /path/to/model /path/to/audio.pcm
 ```
 
-示例输出：
+示例输出（xmov.raw，5.248s，语音 0~4270ms，首帧 360ms + 后续 60ms）：
 
 ```
 VAD initialized, backend: 1
-Read 83968 samples, duration: 5.248s
-/path/to/audio.pcm: [[0,-1],[-1,4270]]
+Read 83968 samples, duration: 5248ms
+
+   0ms: BEGIN    0.014    [0,-1]
+ 360ms: CONTINUE    0.013
+4800ms: END    0.007    [-1,4270]
+4860ms: NONE    0.007
+
+=== Summary ===
+RTF: 0.007
+
+=== 结果说明 ===
+语音起始: WindowDetector(200ms窗口)需要足够语音帧才能确认BEGIN
+          首帧360ms可直接确认(sil_to_speech_thres=150ms), 0ms输出BEGIN
+          若用固定60ms步长, 需第6个chunk(~360ms)才输出[0,-1],
+          前5个chunk为NONE, 实时场景下会被丢弃
+语音结束: max_end_silence_time=800ms, 需累积650ms连续静音才确认END
+          实际语音止于4270ms, 但END在4800ms输出, 延迟约530ms
 ```
 
-输出格式：`<音频路径>: [[start_ms,end_ms],[start_ms,end_ms],...]`
-
-在线模式下，分段以部分结果形式返回：
-- `[start, -1]` — 语音开始于 `start` ms，尚未结束
-- `[-1, end]` — 上段未结束的语音在 `end` ms 结束
+每行为一个状态变化点，跳过连续相同的状态。时间戳为当前 chunk 实时时间，segment（如 `[0,-1]`）随行显示供参考。
 
 ### C API
 
