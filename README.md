@@ -226,6 +226,50 @@ RKNN NPU后端接口已预留，当前实现为 stub。如需启用：
 2. 将 ONNX 模型转换为 RKNN 格式
 3. 设置 `-DENABLE_RKNN=ON -DRKNN_SDK_DIR=/path/to/rknn_sdk` 编译
 
+## 流式输出说明
+
+VAD 内部通过 `WindowDetector`（200ms 窗口）判断语音起止，检测结果存在固有延迟：
+
+- **语音起始（BEGIN）**：需要累积足够多语音帧才能确认，首帧必须超过窗口大小才能立即响应
+- **语音结束（END）**：需要累积足够多连续静音帧才能确认（`max_end_silence_time` 参数控制）
+
+### 示例输出
+
+以 `xmov.raw`（5.248s，语音 0~4270ms）为例，首帧 360ms + 后续 60ms 步长：
+
+```
+   0ms: BEGIN    0.013    [0,-1]        ← 首帧360ms一次确认, 0ms输出
+ 360ms: CONTINUE    0.012
+4800ms: END    0.006    [-1,4270]       ← 实际语音止于4270ms, 延迟~530ms
+4860ms: NONE    0.006
+```
+
+### 语音起始延迟
+
+- `WindowDetector` 窗口 = 200ms，`sil_to_speech_thres` = 150ms
+- 若固定 60ms 步长输入，首个 chunk 只有 6 帧 LFR 输出，WindowDetector 无法确认
+- 通常需要 ~6 个 chunk（~360ms）才返回 `[0, -1]`，前 5 个 chunk 的状态为 NONE
+- **实时场景问题**：前几帧的 NONE 直接输出后，真实的 BEGIN（时间戳 0ms）到来时已错过，导致语音头被吃掉
+- **解决**：首帧使用大块（如 360ms）确保一次确认，或预先填充静音让内部缓存就绪
+
+### 语音结束延迟
+
+- `max_end_silence_time = 800ms`（config.yaml），需累积 `800-150=650ms` 连续静音才确认结束
+- `speech_to_sil_thres = 150ms` 是 WindowDetector 的语音→静音阈值
+- END 输出时刻比实际语音结束位置滞后约 `max_end_sil_time - speech_to_sil_thres`，但 segment 的 end_ms 通过 lookback 机制回溯到正确位置
+- 如需减少延迟，可调小 `max_end_silence_time`
+
+### 状态定义
+
+| 状态 | 数值 | 含义 | 对应 segment |
+|------|------|------|-------------|
+| NONE | 0 | 非语音段 | 无 |
+| BEGIN | 1 | 检测到语音起始 | `[start_ms, -1]` |
+| CONTINUE | 2 | 持续语音中 | 无 |
+| END | 3 | 检测到语音结束 | `[-1, end_ms]` |
+
+输出跳过连续相同状态，仅状态变化时打印。时间戳为当前 chunk 的实时时间。
+
 ## 参考
 
 - [FunASR](https://github.com/modelscope/FunASR) — 阿里达摩院语音识别工具包
