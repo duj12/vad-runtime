@@ -70,9 +70,10 @@ void vad_free_segments(int* segments);
 
 // C++ API
 #ifdef __cplusplus
-#include <vector>
-#include <utility>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace vad {
 
