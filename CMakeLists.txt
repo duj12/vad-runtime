@@ -1,0 +1,97 @@
+cmake_minimum_required(VERSION 3.16)
+project(fsmn_vad C CXX)
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# 编译选项
+option(ENABLE_ONNX "Enable ONNX Runtime backend" ON)
+option(ENABLE_RKNN "Enable RKNN NPU backend" OFF)
+option(BUILD_EXAMPLES "Build example programs" ON)
+option(BUILD_SHARED_LIBS "Build shared library" ON)
+
+# 编译 flags
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2")
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8.2-a+fp16+simd -mtune=cortex-a76.cortex-a55")
+endif()
+
+# 包含目录
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank)
+
+# 第三方依赖：kaldi-native-fbank
+file(GLOB KNF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank/csrc/*.cc ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank/csrc/*.c)
+add_library(knf STATIC ${KNF_SOURCES})
+target_include_directories(knf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kaldi-native-fbank)
+
+# 核心源文件
+file(GLOB SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+
+# 移除不需要的后端文件
+if (NOT ENABLE_ONNX)
+    list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/fsmn_vad_onnx.cpp)
+endif()
+
+if (NOT ENABLE_RKNN)
+    list(REMOVE_ITEM SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/fsmn_vad_rknn.cpp)
+endif()
+
+# 编译库
+add_library(fsmn_vad ${SOURCES})
+target_link_libraries(fsmn_vad PUBLIC knf)
+
+# 添加编译宏
+if (ENABLE_ONNX)
+    target_compile_definitions(fsmn_vad PUBLIC ENABLE_ONNX)
+    # 查找ONNX Runtime
+    if (NOT DEFINED ONNXRUNTIME_DIR)
+        if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-aarch64-1.16.3.tgz")
+        else()
+            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz")
+        endif()
+        message(STATUS "Downloading ONNX Runtime from ${ONNXRUNTIME_URL}")
+        include(FetchContent)
+        FetchContent_Declare(
+            onnxruntime
+            URL ${ONNXRUNTIME_URL}
+            DOWNLOAD_DIR ${CMAKE_CURRENT_BINARY_DIR}/downloads
+        )
+        FetchContent_MakeAvailable(onnxruntime)
+        set(ONNXRUNTIME_DIR ${onnxruntime_SOURCE_DIR})
+    endif()
+    include_directories(${ONNXRUNTIME_DIR}/include)
+    target_link_directories(fsmn_vad PUBLIC ${ONNXRUNTIME_DIR}/lib)
+    target_link_libraries(fsmn_vad PUBLIC onnxruntime)
+endif()
+
+if (ENABLE_RKNN)
+    target_compile_definitions(fsmn_vad PUBLIC ENABLE_RKNN)
+    # 查找RKNN SDK
+    if (NOT DEFINED RKNN_SDK_DIR)
+        message(FATAL_ERROR "RKNN_SDK_DIR must be set when ENABLE_RKNN is ON")
+    endif()
+    include_directories(${RKNN_SDK_DIR}/include)
+    target_link_directories(fsmn_vad PUBLIC ${RKNN_SDK_DIR}/lib)
+    target_link_libraries(fsmn_vad PUBLIC rknn_api)
+endif()
+
+# 编译示例程序
+if (BUILD_EXAMPLES)
+    add_executable(vad_example_onnx examples/demo_onnx.cpp)
+    target_link_libraries(vad_example_onnx PRIVATE fsmn_vad)
+
+    if (ENABLE_RKNN)
+        add_executable(vad_example_rknn examples/demo_rknn.cpp)
+        target_link_libraries(vad_example_rknn PRIVATE fsmn_vad)
+    endif()
+endif()
+
+# 安装规则
+install(TARGETS fsmn_vad knf
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION include)
+install(FILES README.md DESTINATION share/doc/fsmn_vad)
