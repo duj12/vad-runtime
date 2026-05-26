@@ -71,7 +71,7 @@ cmake .. -DENABLE_RKNN=OFF
 make -j$(nproc)
 ```
 
-### RK3588 交叉编译
+### RK3588 交叉编译（Linux）
 
 ```bash
 mkdir build && cd build
@@ -82,6 +82,15 @@ cmake .. \
     -DENABLE_RKNN=ON \
     -DRKNN_SDK_DIR=/path/to/rknn_sdk
 make -j4
+```
+
+### Android 交叉编译（ONNX）
+
+在瑞芯微等 Android ARM64 开发板上运行 ONNX 后端示例，需使用 **ONNX Runtime Android** 库与 NDK 交叉编译。完整流程（依赖、模型、`adb` 部署与调试）见 **[docs/ANDROID.md](docs/ANDROID.md)**。
+
+```bash
+export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c
+bash tools/build_android.sh   # 已有 build-android/ 时仅 make，不重新 cmake
 ```
 
 ### 编译选项

@@ -1,2 +1,4 @@
 build/
+build-android/
 third_party/onnxruntime/
+third_party/onnxruntime-android/
