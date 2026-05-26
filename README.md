@@ -1,42 +1,43 @@
-# FSMN 离线/在线 VAD 库
+# FSMN VAD 库
 
-一个轻量级的语音活动检测(VAD)库，基于FSMN模型，支持ONNX Runtime CPU推理和RK3588 NPU硬件加速，输入为16kHz采样率的PCM原始音频，输出语音段的起止时间。
+基于FSMN模型的语音活动检测(VAD)库，从原始 online-vad 推理代码剥离，去除 ffmpeg 等无关依赖，仅保留核心 VAD 功能。支持 ONNX Runtime CPU 推理，预留 RKNN NPU 加速接口。
 
 ## 特性
 
-- 🎯 高精度：基于FSMN模型的VAD，准确率高
-- ⚡ 高性能：支持RK3588 NPU硬件加速，推理速度快
-- 🔄 流式处理：支持实时流式音频输入
-- 📦 轻量级：最小依赖，仅需要ONNX Runtime或RKNN SDK
-- 🚀 多平台：支持x86_64 Linux/Windows和ARM64 Linux(RK3588)
+- 高精度：基于FSMN模型的VAD
+- 流式处理：支持实时流式音频输入
+- 轻量级：最小依赖，仅需要 ONNX Runtime 和 kaldi-native-fbank
+- 双后端：支持 ONNX Runtime CPU 和 RKNN NPU（预留）
+- 纯净 C API：易于集成到各种语言和框架
 
 ## 项目结构
 
 ```
 vad-runtime/
-├── include/            # 头文件
-│   ├── vad.h           # 对外C/C++ API
-│   ├── vad_model.h     # 抽象模型接口
-│   ├── fsmn_vad_onnx.h # ONNX后端实现
-│   ├── fsmn_vad_rknn.h # RKNN后端实现
-│   ├── e2e_vad.h       # 端点检测算法
-│   └── common.h        # 公共定义
-├── src/                # 源文件
-│   ├── vad.cpp         # API实现
-│   ├── fsmn_vad_onnx.cpp
-│   ├── fsmn_vad_rknn.cpp
-│   └── e2e_vad.cpp
-├── third_party/        # 第三方依赖
-│   └── kaldi-native-fbank # Fbank特征提取
-├── model/              # 模型文件
-│   ├── onnx/           # ONNX格式模型
-│   └── rknn/           # RKNN格式模型
-├── tools/              # 工具脚本
-│   └── convert_onnx_to_rknn.py # ONNX转RKNN模型脚本
-├── examples/           # 示例代码
-│   ├── demo_onnx.cpp   # ONNX后端示例
-│   └── demo_rknn.cpp   # RKNN后端示例
-└── CMakeLists.txt      # 编译配置
+├── include/               # 头文件
+│   ├── vad.h              # 对外C API
+│   ├── vad_model.h        # VAD模型抽象接口
+│   ├── fsmn_vad_onnx.h    # ONNX后端实现
+│   ├── fsmn_vad_rknn.h    # RKNN后端实现（预留）
+│   ├── e2e_vad.h          # 端点检测状态机（header-only）
+│   └── common.h           # 公共定义与常量
+├── src/                   # 源文件
+│   ├── vad.cpp            # C API实现
+│   ├── fsmn_vad_onnx.cpp  # ONNX Runtime推理核心
+│   └── fsmn_vad_rknn.cpp  # RKNN后端实现（预留）
+├── third_party/
+│   ├── kaldi-native-fbank/ # Fbank特征提取（源码）
+│   └── onnxruntime/        # ONNX Runtime（需自行下载）
+├── model/                 # 模型文件
+│   ├── model_quant.onnx   # ONNX量化模型
+│   ├── am.mvn             # CMVN归一化参数（Kaldi文本格式）
+│   └── config.yaml        # 模型配置
+├── examples/
+│   ├── demo_onnx.cpp      # ONNX后端使用示例
+│   ├── demo_rknn.cpp      # RKNN后端使用示例（预留）
+│   ├── xmov.raw           # 测试音频（16kHz, 16bit, 单声道）
+│   └── xmov.wav           # 测试音频WAV格式
+└── CMakeLists.txt         # CMake编译配置
 ```
 
 ## 编译
@@ -45,18 +46,32 @@ vad-runtime/
 
 - CMake 3.16+
 - C++14 编译器
-- ONNX Runtime 1.16+ (可选，用于ONNX后端)
-- RKNN SDK 1.4+ (可选，用于RKNN后端)
+- ONNX Runtime 1.16.3（下载后放到 `third_party/onnxruntime/`）
+- RKNN SDK（可选，用于RKNN后端）
 
-### x86平台编译(ONNX后端)
+### ONNX Runtime 下载
+
+```bash
+# x86_64 Linux
+wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz
+tar xzf onnxruntime-linux-x64-1.16.3.tgz
+mv onnxruntime-linux-x64-1.16.3 onnxruntime
+
+# ARM64 (RK3588)
+wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-aarch64-1.16.3.tgz
+tar xzf onnxruntime-linux-aarch64-1.16.3.tgz
+mv onnxruntime-linux-aarch64-1.16.3 onnxruntime
+```
+
+### x86_64 Linux 编译
 
 ```bash
 mkdir build && cd build
-cmake .. -DENABLE_ONNX=ON -DENABLE_RKNN=OFF
-make -j4
+cmake .. -DENABLE_RKNN=OFF
+make -j$(nproc)
 ```
 
-### RK3588交叉编译(ONNX+RKNN后端)
+### RK3588 交叉编译
 
 ```bash
 mkdir build && cd build
@@ -71,77 +86,60 @@ make -j4
 
 ### 编译选项
 
-- `ENABLE_ONNX`: 是否启用ONNX Runtime后端，默认ON
-- `ENABLE_RKNN`: 是否启用RKNN NPU后端，默认OFF
-- `BUILD_EXAMPLES`: 是否编译示例程序，默认ON
-- `BUILD_SHARED_LIBS`: 是否编译动态库，默认ON
-- `ONNXRUNTIME_DIR`: ONNX Runtime安装目录
-- `RKNN_SDK_DIR`: RKNN SDK安装目录(启用RKNN时必填)
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `ENABLE_ONNX` | ON | 启用ONNX Runtime后端 |
+| `ENABLE_RKNN` | OFF | 启用RKNN NPU后端 |
+| `BUILD_EXAMPLES` | ON | 编译示例程序 |
+| `BUILD_SHARED_LIBS` | ON | 编译为动态库 |
 
 ## 快速开始
 
-### C API 使用示例
+### 运行示例
+
+```bash
+cd build
+LD_LIBRARY_PATH=. ./vad_example_onnx /path/to/model /path/to/audio.pcm
+```
+
+示例输出：
+
+```
+VAD initialized, backend: 1
+Read 83968 samples, duration: 5.248s
+/path/to/audio.pcm: [[0,-1],[-1,4270]]
+```
+
+输出格式：`<音频路径>: [[start_ms,end_ms],[start_ms,end_ms],...]`
+
+在线模式下，分段以部分结果形式返回：
+- `[start, -1]` — 语音开始于 `start` ms，尚未结束
+- `[-1, end]` — 上段未结束的语音在 `end` ms 结束
+
+### C API
 
 ```c
 #include "vad.h"
 
-int main() {
-    // 初始化VAD，自动选择后端
-    void* handle = vad_init("./model", 16000, VAD_BACKEND_AUTO);
-    if (!handle) {
-        // 初始化失败处理
-        return -1;
-    }
+// 初始化
+void* handle = vad_init("./model", 16000, VAD_BACKEND_ONNX);
 
-    // 处理音频数据
-    const short* pcm_data = ...; // 16bit 16kHz 单声道PCM数据
-    int pcm_len = ...;           // 采样点个数
-    bool is_final = false;       // 是否是最后一段
-
-    int* segments = nullptr;
-    int segments_len = 0;
-    int ret = vad_process(handle, pcm_data, pcm_len, is_final, &segments, &segments_len);
-    if (ret == 0 && segments_len > 0) {
-        for (int i = 0; i < segments_len; ++i) {
-            int start_ms = segments[i * 2];
-            int end_ms = segments[i * 2 + 1];
-            // 处理语音段
-        }
-        vad_free_segments(segments);
-    }
-
-    // 重置状态，处理新的音频流
-    vad_reset(handle);
-
-    // 释放资源
-    vad_destroy(handle);
-    return 0;
+// 处理音频块
+int* segments = NULL;
+int segments_len = 0;
+int ret = vad_process(handle, pcm_data, pcm_len, is_final, &segments, &segments_len);
+for (int i = 0; i < segments_len; ++i) {
+    int start_ms = segments[i * 2];
+    int end_ms = segments[i * 2 + 1];
+    printf("[%d,%d]\n", start_ms, end_ms);
 }
-```
+vad_free_segments(segments);
 
-### C++ API 使用示例
+// 重置状态，处理新音频流
+vad_reset(handle);
 
-```cpp
-#include "vad.h"
-
-int main() {
-    // 初始化VAD
-    vad::Vad vad("./model", 16000, vad::VAD_BACKEND_AUTO);
-    if (!vad.IsValid()) {
-        return -1;
-    }
-
-    // 处理音频
-    std::vector<short> pcm_data = ...;
-    auto segments = vad.Process(pcm_data, false);
-    for (auto& seg : segments) {
-        int start_ms = seg.first;
-        int end_ms = seg.second;
-        // 处理语音段
-    }
-
-    return 0;
-}
+// 释放资源
+vad_destroy(handle);
 ```
 
 ## API 说明
@@ -150,9 +148,9 @@ int main() {
 
 ```c
 typedef enum {
-    VAD_BACKEND_AUTO = 0,  // 自动选择，RK3588优先NPU，否则CPU
-    VAD_BACKEND_ONNX = 1,  // 强制使用ONNX Runtime CPU
-    VAD_BACKEND_RKNN = 2   // 强制使用RKNN NPU
+    VAD_BACKEND_AUTO = 0,  // 自动选择（目前等同ONNX）
+    VAD_BACKEND_ONNX = 1,  // ONNX Runtime CPU
+    VAD_BACKEND_RKNN = 2   // RKNN NPU（预留）
 } VadBackendType;
 ```
 
@@ -161,101 +159,75 @@ typedef enum {
 ```c
 /**
  * @brief 初始化VAD模型
- * @param model_dir 模型目录路径，包含model.onnx(或model.rknn)、am.mvn、config.yaml
- * @param sample_rate 音频采样率，必须为16000
+ * @param model_dir 模型目录，需包含 model_quant.onnx, am.mvn, config.yaml
+ * @param sample_rate 采样率，固定16000
  * @param backend 后端类型
  * @return VAD句柄，失败返回NULL
  */
-void* vad_init(const char* model_dir, int sample_rate = 16000, VadBackendType backend = VAD_BACKEND_AUTO);
+void* vad_init(const char* model_dir, int sample_rate, VadBackendType backend);
 ```
 
 ### 处理音频
 
 ```c
 /**
- * @brief 处理音频数据，检测语音段
+ * @brief 处理音频数据
  * @param handle VAD句柄
- * @param pcm_data 16bit PCM音频数据，单声道，采样率16000
- * @param pcm_len 音频数据长度(采样点个数)
- * @param is_final 是否是最后一段数据
- * @param out_segments 输出的语音段数组，每个段为[start_ms, end_ms]，需要调用vad_free_segments释放
- * @param out_segments_len 输出的语音段个数
+ * @param pcm_data 16bit PCM数据（16kHz, 单声道）
+ * @param pcm_len 采样点个数
+ * @param is_final 是否为最后一段
+ * @param out_segments 输出分段数组 [start_ms,end_ms,start_ms,end_ms,...]
+ * @param out_segments_len 分段个数
  * @return 0成功，其他失败
  */
-int vad_process(void* handle, const short* pcm_data, int pcm_len, bool is_final, int** out_segments, int* out_segments_len);
+int vad_process(void* handle, const short* pcm_data, int pcm_len,
+                bool is_final, int** out_segments, int* out_segments_len);
 ```
 
-### 重置状态
+### 其他
 
 ```c
-/**
- * @brief 重置VAD状态，用于处理新的音频流
- * @param handle VAD句柄
- * @return 0成功，其他失败
- */
 int vad_reset(void* handle);
-```
-
-### 释放资源
-
-```c
-/**
- * @brief 释放VAD资源
- * @param handle VAD句柄
- * @return 0成功，其他失败
- */
 int vad_destroy(void* handle);
-
-/**
- * @brief 释放vad_process返回的segments内存
- * @param segments 语音段数组
- */
+VadBackendType vad_get_backend(void* handle);
 void vad_free_segments(int* segments);
 ```
 
-## 模型转换
+## 模型文件
 
-如果需要在RK3588上使用NPU加速，需要将ONNX模型转换为RKNN格式：
-
-1. 安装RKNN Toolkit2: https://github.com/rockchip-linux/rknn-toolkit2
-2. 使用转换脚本：
-
-```bash
-# 转换为RKNN模型，不量化
-python3 tools/convert_onnx_to_rknn.py model/onnx/model.onnx model/rknn/model.rknn
-
-# 转换为量化模型
-python3 tools/convert_onnx_to_rknn.py model/onnx/model.onnx model/rknn/model_quant.rknn --quantize --generate-dataset
-```
-
-## 模型文件说明
-
-模型目录需要包含以下文件：
+模型目录需包含以下文件：
 
 ```
 model/
-├── model.onnx      # ONNX格式模型(用于CPU推理)
-├── model.rknn      # RKNN格式模型(用于NPU推理，可选)
-├── am.mvn          # CMVN归一化参数
-└── config.yaml     # 模型配置文件
+├── model_quant.onnx   # ONNX量化模型（5输入5输出）
+├── am.mvn             # CMVN参数（Kaldi文本格式）
+└── config.yaml        # 模型配置
 ```
 
-## 性能指标
+### config.yaml 参数
 
-| 平台 | 后端 | 实时因子(RTF) | 内存占用 |
-|------|------|---------------|----------|
-| RK3588 | RKNN NPU | <0.01 | <10MB |
-| RK3588 | ONNX CPU | ~0.05 | <20MB |
-| x86 i7-10700 | ONNX CPU | ~0.01 | <20MB |
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `speech_noise_thres` | 语音/噪声判断阈值 | 0.6 |
+| `max_end_silence_time` | 尾部静音超时(ms) | 800 |
+| `max_single_segment_time` | 最大单段长度(ms) | 20000 |
+| `decibel_thres` | 分贝阈值 | -100.0 |
+| `snr_thres` | 信噪比阈值 | -100.0 |
 
-*RTF = 处理时间 / 音频时长，RTF < 1表示可以实时处理*
+### am.mvn 格式
 
-## 许可证
+Kaldi 文本格式，包含 `<AddShift>`（负均值）和 `<Rescale>`（缩放因子）两部分，每部分 400 个 float 值（80维fbank × 5帧拼接）。
 
-MIT License，详见LICENSE文件。
+## RKNN 后端（预留）
+
+RKNN NPU后端接口已预留，当前实现为 stub。如需启用：
+
+1. 安装 [RKNN Toolkit2](https://github.com/rockchip-linux/rknn-toolkit2)
+2. 将 ONNX 模型转换为 RKNN 格式
+3. 设置 `-DENABLE_RKNN=ON -DRKNN_SDK_DIR=/path/to/rknn_sdk` 编译
 
 ## 参考
 
-- [FunASR](https://github.com/alibaba-damo-academy/FunASR): 阿里达摩院语音团队开源的语音识别工具包
-- [kaldi-native-fbank](https://github.com/csukuangfj/kaldi-native-fbank): 纯C++实现的Kaldi Fbank特征提取
-- [RKNN Toolkit2](https://github.com/rockchip-linux/rknn-toolkit2): Rockchip NPU开发工具包
+- [FunASR](https://github.com/modelscope/FunASR) — 阿里达摩院语音识别工具包
+- [kaldi-native-fbank](https://github.com/csukuangfj/kaldi-native-fbank) — 纯C++ Fbank特征提取
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) — 跨平台推理引擎
