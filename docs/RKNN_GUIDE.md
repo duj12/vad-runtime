@@ -123,18 +123,10 @@ dynamic_input=[
 - 输入帧数 ≤ 6 → 使用第二组（6帧），不足部分后端自动 padding
 - 输入帧数 > 6 → 使用第三组（36帧），不足部分后端自动 padding
 
-C++ 代码中的 padding 逻辑：
+C++ 代码中的 padding 逻辑（[`fsmn_vad_rknn.cpp`](../src/fsmn_vad_rknn.cpp)）：
 
-```cpp
-int infer_frames = input_data.size();
-if (infer_frames <= 1) {
-    // pad to 1 frame (min)
-} else if (infer_frames <= 6) {
-    // pad to 6 frames (opt)
-} else {
-    // pad to 36 frames (max)
-}
-```
+- 按实际帧数选择 1 / 6 / 36，不足部分补零
+- **板端 NPU** 须在 `rknn_inputs_set` 前调用 `rknn_set_input_shapes`（查询 `RKNN_QUERY_INPUT_DYNAMIC_RANGE` 后按 shape 组设置）；PC 模拟器由 toolkit 处理，无此步骤
 
 ## 3. PC 模拟器验证
 
@@ -194,11 +186,17 @@ build-arm64/
 |------|--------|------|
 | `ENABLE_RKNN` | OFF | 启用 RKNN NPU 后端 |
 | `ENABLE_ONNX` | ON | 建议关闭，避免需要 ONNX Runtime 头文件 |
-| `RKNN_SDK_DIR` | (空) | RKNN SDK 路径，需包含 `include/rknn_api.h` |
+| `RKNN_SDK_DIR` | (空) | 旧版布局：`include/` + `lib/aarch64/librknnrt.so` |
+| `RKNN_MODEL_ZOO_ROOT` | (空) | rknn_model_zoo 根目录，使用 `3rdparty/rknpu2` |
+| `RKNN_RKNPU2_ROOT` | (空) | rknpu2 SDK 根目录（与 model_zoo 内 rknpu2 布局相同） |
 
 ## 5. RK3588 板端部署
 
-### 5.1 推送文件
+### 5.0 Android（adb）
+
+完整流程（构建、部署、调试）见 **[ANDROID.md](ANDROID.md)** § RKNN NPU。
+
+### 5.1 Linux（ssh/scp）
 
 ```bash
 # 创建目录
@@ -218,7 +216,7 @@ scp model/config.yaml rk3588:/home/root/vad/model/
 scp examples/xmov.raw rk3588:/home/root/vad/
 ```
 
-### 5.2 运行
+### 5.2 运行（Linux）
 
 ```bash
 ssh rk3588 'cd /home/root/vad && \

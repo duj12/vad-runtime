@@ -1,6 +1,122 @@
-# Android 开发板部署指南（ONNX CPU）
+# Android 开发板部署指南（RK3588）
 
-在瑞芯微等 **Android ARM64** 开发板上运行 FSMN VAD，推理后端为 **ONNX Runtime CPU**（与 Linux `vad_example_onnx` 一致）。
+在瑞芯微 **RK3588 Android ARM64** 开发板上运行 FSMN VAD，支持两种推理后端：
+
+| 后端 | 说明 | 文档章节 |
+|------|------|----------|
+| **RKNN NPU**（推荐） | NPU 加速，延迟约 0.3ms/chunk | [§ RKNN NPU](#rknn-npu-推荐) |
+| **ONNX CPU** | ONNX Runtime CPU，与 Linux `vad_example_onnx` 一致 | [§ ONNX CPU](#onnx-cpu) |
+
+---
+
+## RKNN NPU（推荐）
+
+完整流程：**RKNN SDK → 模型转换 → NDK 交叉编译 → install 包 → adb 部署 → 调试**。
+
+### 环境准备
+
+| 组件 | 说明 |
+|------|------|
+| NDK | `export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c` |
+| RKNN SDK | `RKNN_MODEL_ZOO_ROOT=~/workspace/rknn_model_zoo` 或 `RKNN_RKNPU2_ROOT`（含 `include/rknn_api.h` 与 `Android/arm64-v8a/librknnrt.so`） |
+| rknn-toolkit2 | 主机上 ONNX → RKNN 转换（见 [RKNN_GUIDE.md](RKNN_GUIDE.md)） |
+| adb | `adb devices` 可见设备 |
+| ABI / API / STL | `arm64-v8a`，`android-28`；`c++_static`（避免经 `librknnrt.so` 抛 C++ 异常时崩溃） |
+
+```bash
+export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c
+export RKNN_MODEL_ZOO_ROOT=~/workspace/rknn_model_zoo
+adb devices
+```
+
+### 模型准备（RKNN）
+
+| 文件 | 说明 |
+|------|------|
+| `model.rknn` | RKNN 模型（由 `model.onnx` 转换） |
+| `am.mvn` | CMVN 参数 |
+| `config.yaml` | VAD 配置 |
+
+```bash
+# 主机转换（需 rknn-toolkit2）
+python3 tools/convert_onnx_to_rknn.py model/model.onnx model/model.rknn --verify
+```
+
+测试音频：16 kHz、16 bit、单声道 raw PCM（`examples/xmov.raw` 或 `xmov.pcm`）。
+
+### 交叉编译与打包
+
+```bash
+cd ~/workspace/vad-runtime
+bash tools/build_android_rknn.sh
+```
+
+产物：
+
+- `build-android-rknn/vad_example_rknn`、`libfsmn_vad.so`
+- `install/rk3588_android_arm64-v8a/android_vad_rknn/`（含 `lib/librknnrt.so`、`lib/libfsmn_vad.so`、`model/`）
+
+重新配置 CMake：`rm -rf build-android-rknn` 后再运行脚本。
+
+手动 cmake 示例：
+
+```bash
+cmake -B build-android-rknn -S . \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DANDROID_STL=c++_static \
+  -DENABLE_ONNX=OFF \
+  -DENABLE_RKNN=ON \
+  -DRKNN_MODEL_ZOO_ROOT=$RKNN_MODEL_ZOO_ROOT
+cmake --build build-android-rknn -j$(nproc)
+```
+
+### adb 部署与运行
+
+```bash
+bash tools/deploy_android_rknn.sh
+```
+
+默认板端目录：`/data/android_vad_rknn`。手动运行：
+
+```bash
+adb shell 'cd /data/android_vad_rknn && export LD_LIBRARY_PATH=.:./lib && \
+  ./vad_example_rknn ./model ./xmov.raw'
+```
+
+期望输出：
+
+```
+VAD initialized, backend: 2
+...
+=== Summary ===
+RTF: ...
+```
+
+`backend: 2` 表示 `VAD_BACKEND_RKNN`。
+
+### RKNN 调试
+
+| 现象 | 排查 |
+|------|------|
+| `dlopen failed` / `cannot locate symbol` | 是否推送 `lib/librknnrt.so`、`libc++_shared.so`；`LD_LIBRARY_PATH=.:./lib` |
+| 链接阶段 `stdout@LIBC` 未定义 | 提高 `-DANDROID_PLATFORM`（建议 `android-28`） |
+| 误用 Linux `librknnrt.so` | 必须用 `rknpu2/Android/arm64-v8a/` 下的库 |
+| `Failed to init VAD` / `rknn_init` 失败 | `model.rknn` 是否存在；转换时 `target_platform=rk3588` |
+| 崩溃无输出 | `adb logcat \| grep -iE 'vad\|rknn\|fatal'` |
+
+开发 / 验证顺序：
+
+1. 主机：`python3 tools/benchmark_rknn.py --verify`（PC 模拟器对齐 ONNX）
+2. 交叉编译：`file build-android-rknn/vad_example_rknn` 应为 Android ARM64 ELF
+3. 板端：`deploy_android_rknn.sh` 或扁平 `adb push install/.../. /data/android_vad_rknn/`
+
+---
+
+## ONNX CPU
+
+在 Android 上使用 **ONNX Runtime CPU** 后端（与 Linux `vad_example_onnx` 一致）。
 
 完整流程：**环境准备 → ONNX Runtime Android → 模型准备 → NDK 交叉编译 → adb 推送运行 → 调试**。
 
@@ -83,16 +199,6 @@ ls model/
 ffmpeg -y -i examples/xmov.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 examples/xmov.raw
 ```
 
-### 附录：ONNX → RKNN 转换（非本次 Android 主路径）
-
-若日后在板端使用 RKNN NPU，可在 **x86 主机** 安装 [RKNN Toolkit2](https://github.com/rockchip-linux/rknn-toolkit2) 后转换：
-
-```bash
-python3 tools/convert_onnx_to_rknn.py model/model_quant.onnx model/model.rknn --target rk3588
-```
-
-当前 Android 部署仍使用 `model_quant.onnx` + ONNX 后端。
-
 ## 4. 交叉编译
 
 ### 方式 A：一键脚本（推荐）
@@ -102,7 +208,7 @@ python3 tools/convert_onnx_to_rknn.py model/model_quant.onnx model/model.rknn --
 ```bash
 export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c
 cd ~/workspace/vad-runtime
-bash tools/build_android.sh
+bash tools/build_android_onnx.sh
 ```
 
 需要完全重新配置时：`rm -rf build-android` 后再运行上述脚本。
@@ -142,6 +248,13 @@ file vad_example_onnx
 ```
 
 ## 5. adb 部署与运行
+
+推荐直接使用脚本一键部署并运行：
+
+```bash
+export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c
+cd ~/workspace/vad-runtime && bash tools/deploy_android_onnx.sh
+```
 
 ### 5.1 推送文件
 
@@ -185,13 +298,6 @@ Read 83968 samples, duration: 5248ms
 RTF: ...
 ```
 
-### 5.3 一键部署脚本（可选）
-
-```bash
-export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c
-cd ~/workspace/vad-runtime && bash tools/deploy_android.sh
-```
-
 ## 6. 调试
 
 | 现象 | 排查 |
@@ -232,8 +338,8 @@ adb pull /data/local/tmp/vad ./vad-device-copy
 4. **模型未就绪**  
    `vad_init` 返回 NULL 时检查 `model/` 下三文件是否齐全。
 
-5. **RKNN**  
-   当前 CMake **不支持** Android 上链接 RKNN；请使用 ONNX 后端（`VAD_BACKEND_ONNX`）。
+5. **RKNN 与 ONNX 分构建**  
+   RKNN 使用 `build-android-rknn` + `tools/build_android_rknn.sh`；ONNX 使用 `build-android` + `tools/build_android_onnx.sh`。勿混用 CMake 缓存。
 
 ## 参考
 

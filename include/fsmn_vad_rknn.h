@@ -44,6 +44,7 @@ private:
                  std::vector<std::vector<float>>& out_probs,
                  std::vector<std::vector<float>>& in_cache,
                  bool is_final);
+    bool SetDynamicShapes(int infer_frames);
 
     // 常量配置
     int sample_rate_ = MODEL_SAMPLE_RATE;
@@ -64,6 +65,8 @@ private:
     rknn_input_output_num io_num_;
     std::vector<rknn_tensor_attr> input_attrs_;
     std::vector<rknn_tensor_attr> output_attrs_;
+    std::vector<rknn_input_range> input_dyn_range_;
+    bool has_dyn_range_ = false;
 #endif
 
     // Fbank特征提取

@@ -1,6 +1,8 @@
 #include "vad.h"
 #include "vad_model.h"
+#ifdef ENABLE_ONNX
 #include "fsmn_vad_onnx.h"
+#endif
 #ifdef ENABLE_RKNN
 #include "fsmn_vad_rknn.h"
 #endif
@@ -15,15 +17,17 @@ void* vad_init(const char* model_dir, int sample_rate, VadBackendType backend) {
     VadModel* model = nullptr;
 
     // 后端选择逻辑
+#ifdef ENABLE_ONNX
     if (backend == VAD_BACKEND_ONNX) {
         model = new FsmnVadOnnx();
-    }
-#ifdef ENABLE_RKNN
-    else if (backend == VAD_BACKEND_RKNN) {
-        model = new FsmnVadRknn();
-    }
+    } else
 #endif
-    else if (backend == VAD_BACKEND_AUTO) {
+#ifdef ENABLE_RKNN
+    if (backend == VAD_BACKEND_RKNN) {
+        model = new FsmnVadRknn();
+    } else
+#endif
+    if (backend == VAD_BACKEND_AUTO) {
         // 自动选择：优先尝试RKNN，失败则用ONNX
 #ifdef ENABLE_RKNN
         model = new FsmnVadRknn();
@@ -35,8 +39,11 @@ void* vad_init(const char* model_dir, int sample_rate, VadBackendType backend) {
             model = nullptr;
         }
 #endif
-        // 回退到ONNX
+#ifdef ENABLE_ONNX
         model = new FsmnVadOnnx();
+#else
+        return nullptr;
+#endif
     }
 
     if (!model) return nullptr;

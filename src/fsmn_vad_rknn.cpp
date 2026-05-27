@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <iterator>
+#include <cstdlib>
 
 #ifdef ENABLE_RKNN
 
@@ -110,6 +111,64 @@ void FsmnVadRknn::LoadModel(const std::string& model_path) {
             throw std::runtime_error("Failed to query RKNN output attr " + std::to_string(i) + ", error: " + std::to_string(ret));
         }
     }
+
+    has_dyn_range_ = true;
+    input_dyn_range_.resize(io_num_.n_input);
+    for (uint32_t i = 0; i < io_num_.n_input; ++i) {
+        input_dyn_range_[i].index = i;
+        ret = rknn_query(ctx_, RKNN_QUERY_INPUT_DYNAMIC_RANGE, &input_dyn_range_[i],
+                         sizeof(rknn_input_range));
+        if (ret < 0) {
+            has_dyn_range_ = false;
+            input_dyn_range_.clear();
+            break;
+        }
+    }
+}
+
+bool FsmnVadRknn::SetDynamicShapes(int infer_frames) {
+    if (!has_dyn_range_ || input_dyn_range_.empty()) {
+        return true;
+    }
+
+    int group = 0;
+    if (infer_frames <= 1) {
+        group = 0;
+    } else if (infer_frames <= 6) {
+        group = 1;
+    } else {
+        group = 2;
+    }
+    if (group >= (int)input_dyn_range_[0].shape_number) {
+        group = input_dyn_range_[0].shape_number - 1;
+    }
+
+    std::vector<rknn_tensor_attr> attrs(io_num_.n_input);
+    for (uint32_t i = 0; i < io_num_.n_input; ++i) {
+        attrs[i] = input_attrs_[i];
+        if (i < input_dyn_range_.size() && group < (int)input_dyn_range_[i].shape_number) {
+            for (uint32_t d = 0; d < input_dyn_range_[i].n_dims; ++d) {
+                attrs[i].dims[d] = input_dyn_range_[i].dyn_range[group][d];
+            }
+        }
+    }
+
+    int ret = rknn_set_input_shapes(ctx_, io_num_.n_input, attrs.data());
+    if (ret < 0) {
+        fprintf(stderr, "rknn_set_input_shapes failed: %d (infer_frames=%d group=%d)\n",
+                ret, infer_frames, group);
+        return false;
+    }
+
+    for (uint32_t i = 0; i < io_num_.n_input; ++i) {
+        input_attrs_[i].index = i;
+        rknn_query(ctx_, RKNN_QUERY_CURRENT_INPUT_ATTR, &input_attrs_[i], sizeof(rknn_tensor_attr));
+    }
+    for (uint32_t i = 0; i < io_num_.n_output; ++i) {
+        output_attrs_[i].index = i;
+        rknn_query(ctx_, RKNN_QUERY_CURRENT_OUTPUT_ATTR, &output_attrs_[i], sizeof(rknn_tensor_attr));
+    }
+    return true;
 }
 
 void FsmnVadRknn::LoadCmvn(const std::string& cmvn_path) {
@@ -385,6 +444,9 @@ void FsmnVadRknn::ResetCache() {
 }
 
 std::vector<std::pair<int, int>> FsmnVadRknn::Process(const short* pcm_data, int pcm_len, bool is_final) {
+    static int g_chunk_id = 0;
+    const int chunk_id = g_chunk_id++;
+
     std::vector<float> waves(pcm_len);
     for (int i = 0; i < pcm_len; ++i) {
         waves[i] = pcm_data[i] / 32768.0f;
@@ -402,9 +464,49 @@ std::vector<std::pair<int, int>> FsmnVadRknn::Process(const short* pcm_data, int
         return {};
     }
 
+    const bool dbg = std::getenv("VAD_DEBUG") != nullptr;
+    const bool dbg_this = dbg && (chunk_id < 3 || is_final);
+    if (dbg_this) {
+        const int num_frames = (int)vad_probs.size();
+        const int out_dim = num_frames > 0 ? (int)vad_probs[0].size() : 0;
+        int argmax_counts[16] = {0};
+        int argmax_other = 0;
+        double avg_max = 0.0;
+        for (int i = 0; i < num_frames; i++) {
+            int best_k = 0;
+            float best_v = vad_probs[i].empty() ? 0.0f : vad_probs[i][0];
+            for (int k = 1; k < (int)vad_probs[i].size(); k++) {
+                if (vad_probs[i][k] > best_v) {
+                    best_v = vad_probs[i][k];
+                    best_k = k;
+                }
+            }
+            if (best_k >= 0 && best_k < 16) argmax_counts[best_k]++; else argmax_other++;
+            avg_max += best_v;
+        }
+        avg_max = num_frames > 0 ? (avg_max / num_frames) : 0.0;
+
+        fprintf(stderr,
+                "[VAD_DEBUG][RKNN] chunk=%d pcm_len=%d is_final=%d feats=%zu probs=%zu dim=%d waves_used=%zu avg_max=%.6f argmax0=%d argmax1=%d argmax2=%d argmax3=%d argmax4=%d other=%d\n",
+                chunk_id, pcm_len, (int)is_final,
+                vad_feats.size(), vad_probs.size(), out_dim, waves.size(), avg_max,
+                argmax_counts[0], argmax_counts[1], argmax_counts[2], argmax_counts[3], argmax_counts[4], argmax_other);
+    }
+
     auto segments = vad_scorer_(vad_probs, waves, is_final, true,
                                 vad_silence_duration_, vad_max_len_,
                                 vad_speech_noise_thres_, sample_rate_);
+
+    if (dbg_this) {
+        std::string segs;
+        for (const auto& seg : segments) {
+            if (!segs.empty()) segs += " ";
+            if (seg.size() >= 2) {
+                segs += "[" + std::to_string(seg[0]) + "," + std::to_string(seg[1]) + "]";
+            }
+        }
+        fprintf(stderr, "[VAD_DEBUG][RKNN] chunk=%d segments=%s\n", chunk_id, segs.c_str());
+    }
 
     std::vector<std::pair<int, int>> result;
     for (auto& seg : segments) {
@@ -424,104 +526,125 @@ void FsmnVadRknn::Forward(const std::vector<std::vector<float>>& feats,
                           bool /*is_final*/) {
     if (feats.empty()) return;
 
-    int num_frames = feats.size();
-    int feat_dim = feats[0].size();
+    const int num_frames = (int)feats.size();
+    const int feat_dim = (int)feats[0].size();
+    const bool dbg = std::getenv("VAD_DEBUG") != nullptr;
 
-    // RKNN dynamic_input 支持 1, 6, 36 三种帧数，选择最接近的可用尺寸
-    static const int VALID_SIZES[] = {1, 6, 36};
-    int infer_frames = VALID_SIZES[0];
-    for (auto s : VALID_SIZES) {
-        if (num_frames <= s) { infer_frames = s; break; }
-        infer_frames = s;  // 超过 36 则截断到 36
-    }
+    // RKNN dynamic_input nominally supports {1,6,36}, but on RK3588 we observed that
+    // infer_frames=36 may yield only 1 output frame (shape reported as [1,1,248]).
+    // That breaks online VAD behavior. To match ONNX behavior, run in 6-frame micro-batches.
+    out_prob.clear();
+    out_prob.reserve(num_frames);
 
-    // 取实际帧数（不超过推理尺寸）
-    int actual_frames = std::min(num_frames, infer_frames);
+    int offset = 0;
+    while (offset < num_frames) {
+        const int sub_frames = std::min(6, num_frames - offset);
+        const int infer_frames = (sub_frames <= 1) ? 1 : 6;
 
-    // 填充到 infer_frames × feat_dim，超出部分补零
-    std::vector<float> input_data(infer_frames * feat_dim, 0.0f);
-    for (int i = 0; i < actual_frames; i++) {
-        memcpy(&input_data[i * feat_dim], feats[i].data(), sizeof(float) * feat_dim);
-    }
+        if (dbg && offset == 0) {
+            fprintf(stderr, "[VAD_DEBUG][RKNN] forward num_frames=%d (micro-batch infer_frames=%d)\n",
+                    num_frames, infer_frames);
+        }
 
-    // Cache NHWC 转换: NCHW [1,128,19,1] → NHWC [1,19,1,128]
-    // NCHW 索引: c*19 + h, NHWC 索引: h*128 + c
-    std::vector<std::vector<float>> cache_nhwc(in_cache.size());
-    for (size_t i = 0; i < in_cache.size(); i++) {
-        cache_nhwc[i].resize(128 * 19, 0.0f);
-        for (int c = 0; c < 128; c++) {
-            for (int h = 0; h < 19; h++) {
-                cache_nhwc[i][h * 128 + c] = in_cache[i][c * 19 + h];
+        std::vector<float> input_data(infer_frames * feat_dim, 0.0f);
+        for (int i = 0; i < sub_frames; i++) {
+            memcpy(&input_data[i * feat_dim], feats[offset + i].data(), sizeof(float) * feat_dim);
+        }
+
+        // Cache NCHW -> NHWC
+        std::vector<std::vector<float>> cache_nhwc(in_cache.size());
+        for (size_t i = 0; i < in_cache.size(); i++) {
+            cache_nhwc[i].resize(128 * 19, 0.0f);
+            for (int c = 0; c < 128; c++) {
+                for (int h = 0; h < 19; h++) {
+                    cache_nhwc[i][h * 128 + c] = in_cache[i][c * 19 + h];
+                }
             }
         }
+
+        if (!SetDynamicShapes(infer_frames)) {
+            return;
+        }
+
+        std::vector<rknn_input> inputs(io_num_.n_input);
+        memset(inputs.data(), 0, sizeof(rknn_input) * inputs.size());
+
+        inputs[0].index = 0;
+        inputs[0].type = input_attrs_[0].type;
+        inputs[0].size = input_attrs_[0].n_elems * sizeof(float);
+        inputs[0].buf = input_data.data();
+        inputs[0].pass_through = 0;
+        inputs[0].fmt = input_attrs_[0].fmt;
+
+        for (size_t i = 0; i < in_cache.size() && (1 + i) < io_num_.n_input; i++) {
+            const uint32_t idx = 1 + static_cast<uint32_t>(i);
+            inputs[idx].index = idx;
+            inputs[idx].type = input_attrs_[idx].type;
+            inputs[idx].size = input_attrs_[idx].n_elems * sizeof(float);
+            inputs[idx].buf = cache_nhwc[i].data();
+            inputs[idx].pass_through = 0;
+            inputs[idx].fmt = input_attrs_[idx].fmt;
+        }
+
+        int ret = rknn_inputs_set(ctx_, io_num_.n_input, inputs.data());
+        if (ret < 0) {
+            fprintf(stderr, "RKNN inputs_set failed: %d (frames=%d infer=%d)\n", ret, num_frames, infer_frames);
+            return;
+        }
+
+        ret = rknn_run(ctx_, nullptr);
+        if (ret < 0) {
+            fprintf(stderr, "RKNN run failed: %d\n", ret);
+            return;
+        }
+
+        std::vector<rknn_output> outputs(io_num_.n_output);
+        memset(outputs.data(), 0, sizeof(rknn_output) * outputs.size());
+        for (uint32_t i = 0; i < io_num_.n_output; i++) {
+            outputs[i].want_float = 1;
+        }
+
+        ret = rknn_outputs_get(ctx_, io_num_.n_output, outputs.data(), nullptr);
+        if (ret < 0) {
+            fprintf(stderr, "RKNN outputs_get failed: %d\n", ret);
+            return;
+        }
+
+        float* logits_data = static_cast<float*>(outputs[0].buf);
+        if (!logits_data) {
+            fprintf(stderr, "RKNN output logits buffer is null\n");
+            rknn_outputs_release(ctx_, io_num_.n_output, outputs.data());
+            return;
+        }
+
+        const int out0_elems = (outputs[0].size > 0) ? (int)(outputs[0].size / sizeof(float)) : 0;
+        if (infer_frames <= 0 || out0_elems <= 0 || (out0_elems % infer_frames) != 0) {
+            rknn_outputs_release(ctx_, io_num_.n_output, outputs.data());
+            fprintf(stderr, "RKNN invalid output size: out0_elems=%d infer_frames=%d\n", out0_elems, infer_frames);
+            return;
+        }
+        const int output_dim = out0_elems / infer_frames;
+
+        // Append per-frame logits (only real frames, not padded)
+        for (int i = 0; i < sub_frames; i++) {
+            out_prob.emplace_back(output_dim);
+            memcpy(out_prob.back().data(), logits_data + i * output_dim, sizeof(float) * output_dim);
+        }
+
+        // Update cache outputs 1-4 (NHWC -> NCHW)
+        int output_cache_count = std::min({(int)in_cache.size(), (int)io_num_.n_output - 1, 4});
+        for (int i = 0; i < output_cache_count; i++) {
+            float* cache_out_data = static_cast<float*>(outputs[i + 1].buf);
+            for (int c = 0; c < 128; c++) {
+                for (int h = 0; h < 19; h++) {
+                    in_cache[i][c * 19 + h] = cache_out_data[h * 128 + c];
+                }
+            }
+        }
+
+        rknn_outputs_release(ctx_, io_num_.n_output, outputs.data());
+        offset += sub_frames;
     }
-
-    // 构建 RKNN 输入
-    std::vector<rknn_input> inputs(io_num_.n_input);
-    memset(inputs.data(), 0, sizeof(rknn_input) * inputs.size());
-
-    // 输入 0: speech [1, infer_frames, feat_dim]
-    inputs[0].index = 0;
-    inputs[0].type = RKNN_TENSOR_FLOAT32;
-    inputs[0].size = input_data.size() * sizeof(float);
-    inputs[0].buf = input_data.data();
-    inputs[0].pass_through = false;
-    inputs[0].fmt = RKNN_TENSOR_NCHW;
-
-    // 输入 1-4: cache NHWC [1, 19, 1, 128]
-    for (size_t i = 0; i < in_cache.size() && i < 4; i++) {
-        inputs[1 + i].index = 1 + i;
-        inputs[1 + i].type = RKNN_TENSOR_FLOAT32;
-        inputs[1 + i].size = cache_nhwc[i].size() * sizeof(float);
-        inputs[1 + i].buf = cache_nhwc[i].data();
-        inputs[1 + i].pass_through = false;
-        inputs[1 + i].fmt = RKNN_TENSOR_NHWC;
-    }
-
-    // 设置输入
-    int ret = rknn_inputs_set(ctx_, io_num_.n_input, inputs.data());
-    if (ret < 0) {
-        throw std::runtime_error("Failed to set RKNN inputs, error: " + std::to_string(ret));
-    }
-
-    // 运行推理
-    ret = rknn_run(ctx_, nullptr);
-    if (ret < 0) {
-        throw std::runtime_error("Failed to run RKNN inference, error: " + std::to_string(ret));
-    }
-
-    // 获取输出
-    std::vector<rknn_output> outputs(io_num_.n_output);
-    memset(outputs.data(), 0, sizeof(rknn_output) * outputs.size());
-    for (int i = 0; i < io_num_.n_output; i++) {
-        outputs[i].want_float = true;
-    }
-
-    ret = rknn_outputs_get(ctx_, io_num_.n_output, outputs.data(), nullptr);
-    if (ret < 0) {
-        throw std::runtime_error("Failed to get RKNN outputs, error: " + std::to_string(ret));
-    }
-
-    // 输出 0: logits [1, infer_frames, output_dim]，只取 actual_frames 行
-    float* logits_data = static_cast<float*>(outputs[0].buf);
-    int output_dim = (output_attrs_[0].n_dims >= 1) ?
-        output_attrs_[0].dims[output_attrs_[0].n_dims - 1] : 1;
-
-    out_prob.resize(actual_frames, std::vector<float>(output_dim));
-    for (int i = 0; i < actual_frames; i++) {
-        memcpy(out_prob[i].data(), logits_data + i * output_dim, sizeof(float) * output_dim);
-    }
-
-    // 更新 cache（输出 1-4），RKNN 输出格式 NCHW [1,128,19,1]
-    int output_cache_count = std::min({(int)in_cache.size(), (int)io_num_.n_output - 1, 4});
-    for (int i = 0; i < output_cache_count; i++) {
-        float* cache_out_data = static_cast<float*>(outputs[i + 1].buf);
-        size_t cache_size = in_cache[i].size();
-        memcpy(in_cache[i].data(), cache_out_data, sizeof(float) * cache_size);
-    }
-
-    // 释放输出
-    rknn_outputs_release(ctx_, io_num_.n_output, outputs.data());
 }
 
 } // namespace vad

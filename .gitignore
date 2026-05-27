@@ -1,6 +1,8 @@
 build/
 build-android/
+build-android-rknn/
 build-arm64/
+install/
 third_party/onnxruntime/
 third_party/onnxruntime-android/
 tools/*.onnx

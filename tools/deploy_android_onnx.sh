@@ -8,11 +8,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ANDROID_NDK="${ANDROID_NDK:-/home/jingsz/other/android-ndk-r19c}"
 BUILD_DIR="${PROJECT_ROOT}/build-android"
 DEVICE_DIR="/data/local/tmp/vad"
-PCM_FILE="${PROJECT_ROOT}/examples/xmov.pcm"
+PCM_NAME="xmov.raw"
 
 if [[ ! -d "${BUILD_DIR}" ]] || [[ ! -f "${BUILD_DIR}/vad_example_onnx" ]]; then
-    echo "==> build-android missing, running build_android.sh"
-    bash "${SCRIPT_DIR}/build_android.sh"
+    echo "==> build-android missing, running build_android_onnx.sh"
+    bash "${SCRIPT_DIR}/build_android_onnx.sh"
 fi
 
 ORT_SO="${PROJECT_ROOT}/third_party/onnxruntime-android/lib/arm64-v8a/libonnxruntime.so"
@@ -39,18 +39,16 @@ adb push "${BUILD_DIR}/libfsmn_vad.so" "${DEVICE_DIR}/"
 adb push "${ORT_SO}" "${DEVICE_DIR}/"
 adb push "${CXX_SHARED}" "${DEVICE_DIR}/"
 adb push "${PROJECT_ROOT}/model/." "${DEVICE_DIR}/model/"
-if [[ -f "${PCM_FILE}" ]]; then
-    adb push "${PCM_FILE}" "${DEVICE_DIR}/xmov.pcm"
-    PCM_NAME="xmov.pcm"
+if [[ -f "${PROJECT_ROOT}/examples/${PCM_NAME}" ]]; then
+    adb push "${PROJECT_ROOT}/examples/${PCM_NAME}" "${DEVICE_DIR}/${PCM_NAME}"
 else
-    echo "Warning: ${PCM_FILE} not found, skip PCM push"
-    PCM_NAME=""
+    echo "Warning: ${PROJECT_ROOT}/examples/${PCM_NAME} not found, skip PCM push"
 fi
 
 echo "==> Run (if model_quant.onnx is on device)"
-if [[ -f "${PROJECT_ROOT}/model/model_quant.onnx" ]] && [[ -n "${PCM_NAME}" ]]; then
-    adb shell "cd ${DEVICE_DIR} && chmod +x vad_example_onnx && LD_LIBRARY_PATH=. ./vad_example_onnx ./model ./${PCM_NAME}"
+if [[ -f "${PROJECT_ROOT}/model/model_quant.onnx" ]] && adb shell "test -f ${DEVICE_DIR}/${PCM_NAME}" >/dev/null 2>&1; then
+    adb shell "cd ${DEVICE_DIR} && chmod +x vad_example_onnx && ${VAD_DEBUG:+VAD_DEBUG=${VAD_DEBUG}} LD_LIBRARY_PATH=. ./vad_example_onnx ./model ./${PCM_NAME}"
 else
-    echo "Skip run: need model/model_quant.onnx and ${PCM_FILE}"
-    echo "Manual: adb shell 'cd ${DEVICE_DIR} && LD_LIBRARY_PATH=. ./vad_example_onnx ./model ./xmov.pcm'"
+    echo "Skip run: need model/model_quant.onnx and ${DEVICE_DIR}/${PCM_NAME}"
+    echo "Manual: adb shell 'cd ${DEVICE_DIR} && LD_LIBRARY_PATH=. ./vad_example_onnx ./model ./${PCM_NAME}'"
 fi

@@ -40,290 +40,34 @@ vad-runtime/
 └── CMakeLists.txt         # CMake编译配置
 ```
 
-## 编译
-
-### 依赖要求
-
-- CMake 3.16+
-- C++14 编译器
-- ONNX Runtime 1.16.3（下载后放到 `third_party/onnxruntime/`）
-- RKNN SDK（可选，[RKNN NPU后端](docs/RKNN_GUIDE.md)需要）
-
-### ONNX Runtime 下载
-
-```bash
-# x86_64 Linux
-wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-x64-1.16.3.tgz
-tar xzf onnxruntime-linux-x64-1.16.3.tgz
-mv onnxruntime-linux-x64-1.16.3 onnxruntime
-
-# ARM64 (RK3588)
-wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-linux-aarch64-1.16.3.tgz
-tar xzf onnxruntime-linux-aarch64-1.16.3.tgz
-mv onnxruntime-linux-aarch64-1.16.3 onnxruntime
-```
-
-### x86_64 Linux 编译
-
-```bash
-mkdir build && cd build
-cmake .. -DENABLE_RKNN=OFF
-make -j$(nproc)
-```
-
-### RK3588 交叉编译（Linux）
-
-```bash
-mkdir build && cd build
-cmake .. \
-    -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-    -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-    -DENABLE_ONNX=ON \
-    -DENABLE_RKNN=ON \
-    -DRKNN_SDK_DIR=/path/to/rknn_sdk
-make -j4
-```
-
-### Android 交叉编译（ONNX）
-
-在瑞芯微等 Android ARM64 开发板上运行 ONNX 后端示例，需使用 **ONNX Runtime Android** 库与 NDK 交叉编译。完整流程（依赖、模型、`adb` 部署与调试）见 **[docs/ANDROID.md](docs/ANDROID.md)**。
-
-```bash
-export ANDROID_NDK=/home/jingsz/other/android-ndk-r19c
-bash tools/build_android.sh   # 已有 build-android/ 时仅 make，不重新 cmake
-```
-
-### 编译选项
-
-| 选项 | 默认值 | 说明 |
-|------|--------|------|
-| `ENABLE_ONNX` | ON | 启用ONNX Runtime后端 |
-| `ENABLE_RKNN` | OFF | 启用RKNN NPU后端 |
-| `BUILD_EXAMPLES` | ON | 编译示例程序 |
-| `BUILD_SHARED_LIBS` | ON | 编译为动态库 |
-
 ## 快速开始
 
-### 运行示例
+### Linux（x86_64）— ONNX CPU
 
 ```bash
-cd build
-LD_LIBRARY_PATH=. ./vad_example_onnx /path/to/model /path/to/audio.pcm
+mkdir -p build && cd build
+cmake .. -DENABLE_ONNX=ON -DENABLE_RKNN=OFF
+cmake --build . -j"$(nproc)"
+LD_LIBRARY_PATH=. ./vad_example_onnx ../model ../examples/xmov.raw
 ```
 
-示例输出（xmov.raw，5.248s，语音 0~4270ms，首帧 360ms + 后续 60ms）：
+### RK3588 Android（推荐 RKNN NPU）
 
-```
-VAD initialized, backend: 1
-Read 83968 samples, duration: 5248ms
+完整流程请看：
 
-   0ms: BEGIN    0.014    [0,-1]
- 360ms: CONTINUE    0.013
-4800ms: END    0.007    [-1,4270]
-4860ms: NONE    0.007
-
-=== Summary ===
-RTF: 0.007
-
-=== 结果说明 ===
-语音起始: WindowDetector(200ms窗口)需要足够语音帧才能确认BEGIN
-          首帧360ms可直接确认(sil_to_speech_thres=150ms), 0ms输出BEGIN
-          若用固定60ms步长, 需第6个chunk(~360ms)才输出[0,-1],
-          前5个chunk为NONE, 实时场景下会被丢弃
-语音结束: max_end_silence_time=800ms, 需累积650ms连续静音才确认END
-          实际语音止于4270ms, 但END在4800ms输出, 延迟约530ms
-```
-
-每行为一个状态变化点，跳过连续相同的状态。时间戳为当前 chunk 实时时间，segment（如 `[0,-1]`）随行显示供参考。
-
-### C API
-
-```c
-#include "vad.h"
-
-// 初始化
-void* handle = vad_init("./model", 16000, VAD_BACKEND_ONNX);
-
-// 处理音频块
-int* segments = NULL;
-int segments_len = 0;
-int ret = vad_process(handle, pcm_data, pcm_len, is_final, &segments, &segments_len);
-for (int i = 0; i < segments_len; ++i) {
-    int start_ms = segments[i * 2];
-    int end_ms = segments[i * 2 + 1];
-    printf("[%d,%d]\n", start_ms, end_ms);
-}
-vad_free_segments(segments);
-
-// 重置状态，处理新音频流
-vad_reset(handle);
-
-// 释放资源
-vad_destroy(handle);
-```
-
-## API 说明
-
-### 后端类型
-
-```c
-typedef enum {
-    VAD_BACKEND_AUTO = 0,  // 自动选择（目前等同ONNX）
-    VAD_BACKEND_ONNX = 1,  // ONNX Runtime CPU
-    VAD_BACKEND_RKNN = 2   // RKNN NPU（RK3588）
-} VadBackendType;
-```
-
-### 初始化
-
-```c
-/**
- * @brief 初始化VAD模型
- * @param model_dir 模型目录，需包含 model_quant.onnx, am.mvn, config.yaml
- * @param sample_rate 采样率，固定16000
- * @param backend 后端类型
- * @return VAD句柄，失败返回NULL
- */
-void* vad_init(const char* model_dir, int sample_rate, VadBackendType backend);
-```
-
-### 处理音频
-
-```c
-/**
- * @brief 处理音频数据
- * @param handle VAD句柄
- * @param pcm_data 16bit PCM数据（16kHz, 单声道）
- * @param pcm_len 采样点个数
- * @param is_final 是否为最后一段
- * @param out_segments 输出分段数组 [start_ms,end_ms,start_ms,end_ms,...]
- * @param out_segments_len 分段个数
- * @return 0成功，其他失败
- */
-int vad_process(void* handle, const short* pcm_data, int pcm_len,
-                bool is_final, int** out_segments, int* out_segments_len);
-```
-
-### 其他
-
-```c
-int vad_reset(void* handle);
-int vad_destroy(void* handle);
-VadBackendType vad_get_backend(void* handle);
-void vad_free_segments(int* segments);
-```
-
-## 模型文件
-
-模型目录需包含以下文件：
-
-```
-model/
-├── model_quant.onnx   # ONNX量化模型（5输入5输出）
-├── am.mvn             # CMVN参数（Kaldi文本格式）
-└── config.yaml        # 模型配置
-```
-
-### config.yaml 参数
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `speech_noise_thres` | 语音/噪声判断阈值 | 0.6 |
-| `max_end_silence_time` | 尾部静音超时(ms) | 800 |
-| `max_single_segment_time` | 最大单段长度(ms) | 60000 |
-| `decibel_thres` | 分贝阈值 | -100.0 |
-| `snr_thres` | 信噪比阈值 | -100.0 |
-
-### am.mvn 格式
-
-Kaldi 文本格式，包含 `<AddShift>`（负均值）和 `<Rescale>`（缩放因子）两部分，每部分 400 个 float 值（80维fbank × 5帧拼接）。
-
-## RKNN NPU 后端
-
-RKNN 后端通过 RK3588 NPU 加速 VAD 推理，延迟约 0.3ms/chunk（远低于 ONNX CPU 的 ~2ms）。
-
-完整流程（模型转换 → 模拟器验证 → 交叉编译 → 板端部署）见 **[docs/RKNN_GUIDE.md](docs/RKNN_GUIDE.md)**。
-
-### 快速路线图
+- [`docs/ANDROID.md`](docs/ANDROID.md) — Android RKNN/ONNX 构建、adb 部署、调试
+- [`docs/RKNN_GUIDE.md`](docs/RKNN_GUIDE.md) — RKNN 模型转换、PC 模拟器验证、Linux/Android 部署注意事项
 
 ```bash
-# 1. ONNX 导出（在 FunASR 环境中）
-python tools/export_onnx.py                    # → model/model.onnx
-
-# 2. 转换为 RKNN（在 rknn-toolkit2 环境中）
-python tools/convert_onnx_to_rknn.py model/model.onnx model/model.rknn
-
-# 3. PC 模拟器基准测试（验证正确性与速度）
-python tools/benchmark_rknn.py --no-verify
-
-# 4. aarch64 交叉编译
-mkdir build-arm64 && cd build-arm64
-cmake .. -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-         -DENABLE_ONNX=OFF -DENABLE_RKNN=ON \
-         -DRKNN_SDK_DIR=/path/to/rknn_sdk
-make -j4
-
-# 5. 板端运行
-scp build-arm64/vad_example_rknn rk3588:/home/root/vad/
-scp model/model.rknn rk3588:/home/root/vad/model/
-# ... 详见 docs/RKNN_GUIDE.md
+export ANDROID_NDK=~/other/android-ndk-r19c
+export RKNN_MODEL_ZOO_ROOT=~/workspace/rknn_model_zoo
+bash tools/build_android_rknn.sh
+bash tools/deploy_android_rknn.sh
 ```
 
-### 模型文件
+## C API
 
-RKNN 后端使用 `model.rknn`（FP32，约 1.3MB），而非 ONNX 的 `model_quant.onnx`。模型目录需包含：
-
-```
-model/
-├── model.rknn      # RKNN 模型（由 model.onnx 转换）
-├── am.mvn          # CMVN 参数（Kaldi 文本格式，ONNX/RKNN 共用）
-└── config.yaml     # 模型配置（ONNX/RKNN 共用）
-```
-
-## 流式输出说明
-
-VAD 内部通过 `WindowDetector`（200ms 窗口）判断语音起止，检测结果存在固有延迟：
-
-- **语音起始（BEGIN）**：需要累积足够多语音帧才能确认，首帧必须超过窗口大小才能立即响应
-- **语音结束（END）**：需要累积足够多连续静音帧才能确认（`max_end_silence_time` 参数控制）
-
-### 示例输出
-
-以 `xmov.raw`（5.248s，语音 0~4270ms）为例，首帧 360ms + 后续 60ms 步长：
-
-```
-   0ms: BEGIN    0.013    [0,-1]        ← 首帧360ms一次确认, 0ms输出
- 360ms: CONTINUE    0.012
-4800ms: END    0.006    [-1,4270]       ← 实际语音止于4270ms, 延迟~530ms
-4860ms: NONE    0.006
-```
-
-### 语音起始延迟
-
-- `WindowDetector` 窗口 = 200ms，`sil_to_speech_thres` = 150ms
-- 若固定 60ms 步长输入，首个 chunk 只有 6 帧 LFR 输出，WindowDetector 无法确认
-- 通常需要 ~6 个 chunk（~360ms）才返回 `[0, -1]`，前 5 个 chunk 的状态为 NONE
-- **实时场景问题**：前几帧的 NONE 直接输出后，真实的 BEGIN（时间戳 0ms）到来时已错过，导致语音头被吃掉
-- **解决**：首帧使用大块（如 360ms）确保一次确认，或预先填充静音让内部缓存就绪
-
-### 语音结束延迟
-
-- `max_end_silence_time = 800ms`（config.yaml），需累积 `800-150=650ms` 连续静音才确认结束
-- `speech_to_sil_thres = 150ms` 是 WindowDetector 的语音→静音阈值
-- END 输出时刻比实际语音结束位置滞后约 `max_end_sil_time - speech_to_sil_thres`，但 segment 的 end_ms 通过 lookback 机制回溯到正确位置
-- 如需减少延迟，可调小 `max_end_silence_time`
-
-### 状态定义
-
-| 状态 | 数值 | 含义 | 对应 segment |
-|------|------|------|-------------|
-| NONE | 0 | 非语音段 | 无 |
-| BEGIN | 1 | 检测到语音起始 | `[start_ms, -1]` |
-| CONTINUE | 2 | 持续语音中 | 无 |
-| END | 3 | 检测到语音结束 | `[-1, end_ms]` |
-
-输出跳过连续相同状态，仅状态变化时打印。时间戳为当前 chunk 的实时时间。
+对外接口见 [`include/vad.h`](include/vad.h)。示例程序在 [`examples/demo_onnx.cpp`](examples/demo_onnx.cpp) 与 [`examples/demo_rknn.cpp`](examples/demo_rknn.cpp)。
 
 ## 参考
 

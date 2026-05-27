@@ -17,11 +17,6 @@ if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64" AND NOT ANDROID)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8.2-a+fp16+simd -mtune=cortex-a76.cortex-a55")
 endif()
 
-if (ANDROID AND ENABLE_RKNN)
-    message(WARNING "RKNN backend is not supported on Android, disabling ENABLE_RKNN")
-    set(ENABLE_RKNN OFF CACHE BOOL "Enable RKNN NPU backend" FORCE)
-endif()
-
 # 包含目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/)
@@ -104,23 +99,34 @@ endif()
 
 if (ENABLE_RKNN)
     target_compile_definitions(fsmn_vad PUBLIC ENABLE_RKNN)
-    # 查找RKNN SDK
-    if (NOT DEFINED RKNN_SDK_DIR)
-        message(FATAL_ERROR "RKNN_SDK_DIR must be set when ENABLE_RKNN is ON")
+    list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+    include(FindRknn)
+
+    add_library(rknnrt SHARED IMPORTED GLOBAL)
+    set_target_properties(rknnrt PROPERTIES IMPORTED_LOCATION "${RKNN_LIBRARY}")
+    target_include_directories(fsmn_vad PUBLIC ${RKNN_INCLUDE_DIR})
+    if (ANDROID)
+        target_link_libraries(fsmn_vad PUBLIC rknnrt log)
+    else()
+        target_link_libraries(fsmn_vad PUBLIC rknnrt)
     endif()
-    include_directories(${RKNN_SDK_DIR}/include)
-    target_link_directories(fsmn_vad PUBLIC ${RKNN_SDK_DIR}/lib)
-    target_link_libraries(fsmn_vad PUBLIC rknn_api)
 endif()
 
 # 编译示例程序
 if (BUILD_EXAMPLES)
-    add_executable(vad_example_onnx examples/demo_onnx.cpp)
-    target_link_libraries(vad_example_onnx PRIVATE fsmn_vad)
+    if (ENABLE_ONNX)
+        add_executable(vad_example_onnx examples/demo_onnx.cpp)
+        target_link_libraries(vad_example_onnx PRIVATE fsmn_vad)
+    endif()
 
     if (ENABLE_RKNN)
         add_executable(vad_example_rknn examples/demo_rknn.cpp)
         target_link_libraries(vad_example_rknn PRIVATE fsmn_vad)
+        if (ANDROID)
+            set_target_properties(vad_example_rknn fsmn_vad PROPERTIES
+                BUILD_RPATH "\$ORIGIN/lib"
+                INSTALL_RPATH "\$ORIGIN/lib")
+        endif()
     endif()
 endif()
 

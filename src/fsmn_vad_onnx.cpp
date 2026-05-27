@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <iterator>
+#include <cstdlib>
 
 namespace vad {
 
@@ -384,6 +385,9 @@ void FsmnVadOnnx::ExtractFeats(std::vector<std::vector<float>>& vad_feats,
 }
 
 std::vector<std::pair<int, int>> FsmnVadOnnx::Process(const short* pcm_data, int pcm_len, bool is_final) {
+    static int g_chunk_id = 0;
+    const int chunk_id = g_chunk_id++;
+
     // 转换为float，范围[-1, 1]
     std::vector<float> waves(pcm_len);
     for (int i = 0; i < pcm_len; ++i) {
@@ -404,10 +408,47 @@ std::vector<std::pair<int, int>> FsmnVadOnnx::Process(const short* pcm_data, int
         return {};
     }
 
+    if (std::getenv("VAD_DEBUG")) {
+        const int num_frames = (int)vad_probs.size();
+        const int out_dim = num_frames > 0 ? (int)vad_probs[0].size() : 0;
+        int argmax_counts[16] = {0};
+        int argmax_other = 0;
+        double avg_max = 0.0;
+        for (int i = 0; i < num_frames; i++) {
+            int best_k = 0;
+            float best_v = vad_probs[i].empty() ? 0.0f : vad_probs[i][0];
+            for (int k = 1; k < (int)vad_probs[i].size(); k++) {
+                if (vad_probs[i][k] > best_v) {
+                    best_v = vad_probs[i][k];
+                    best_k = k;
+                }
+            }
+            if (best_k >= 0 && best_k < 16) argmax_counts[best_k]++; else argmax_other++;
+            avg_max += best_v;
+        }
+        avg_max = num_frames > 0 ? (avg_max / num_frames) : 0.0;
+
+        fprintf(stderr,
+                "[VAD_DEBUG][ONNX] chunk=%d pcm_len=%d is_final=%d feats=%zu probs=%zu dim=%d waves_used=%zu avg_max=%.6f argmax0=%d argmax1=%d argmax2=%d argmax3=%d argmax4=%d other=%d\n",
+                chunk_id, pcm_len, (int)is_final,
+                vad_feats.size(), vad_probs.size(), out_dim, waves.size(), avg_max,
+                argmax_counts[0], argmax_counts[1], argmax_counts[2], argmax_counts[3], argmax_counts[4], argmax_other);
+    }
+
     // VAD后处理
     auto segments = vad_scorer_(vad_probs, waves, is_final, true,
                                 vad_silence_duration_, vad_max_len_,
                                 vad_speech_noise_thres_, sample_rate_);
+    if (std::getenv("VAD_DEBUG")) {
+        std::string segs;
+        for (const auto& seg : segments) {
+            if (!segs.empty()) segs += " ";
+            if (seg.size() >= 2) {
+                segs += "[" + std::to_string(seg[0]) + "," + std::to_string(seg[1]) + "]";
+            }
+        }
+        fprintf(stderr, "[VAD_DEBUG][ONNX] chunk=%d segments=%s\n", chunk_id, segs.c_str());
+    }
     // 转换为pair格式，保留所有分段（包括在线模式下[start, -1]和[-1, end]部分分段）
     std::vector<std::pair<int, int>> result;
     for (auto& seg : segments) {
