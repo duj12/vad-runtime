@@ -1,0 +1,10 @@
+# 二进制文件禁止换行转换，避免 Windows 检出时损坏
+*.so     binary
+*.so.*   binary
+*.a      binary
+*.onnx   binary
+*.rknn   binary
+
+# 随仓库携带的第三方依赖保持原始字节（头文件/许可证均为 LF）
+third_party/onnxruntime/** -text
+prebuilt/** -text

@@ -3,7 +3,8 @@ build-android/
 build-android-rknn/
 build-arm64/
 install/
-third_party/onnxruntime/
+# third_party/onnxruntime/ 现在随仓库一起管理（预编译依赖，见其 README.md）
+# 旧版 setup 脚本的下载目录仍忽略
 third_party/onnxruntime-android/
 tools/*.onnx
 rknn_sdk/

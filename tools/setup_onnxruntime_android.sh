@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Download and extract ONNX Runtime Android AAR into third_party/onnxruntime-android/
+# Download and extract ONNX Runtime Android AAR into third_party/onnxruntime/android/
+# 仓库已内置该目录，通常无需运行本脚本；仅在需要其它 ABI（如 x86_64）或升级版本时使用。
 set -euo pipefail
 
 ORT_VERSION="1.16.3"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DEST_DIR="${PROJECT_ROOT}/third_party/onnxruntime-android"
+DEST_DIR="${PROJECT_ROOT}/third_party/onnxruntime/android"
 TMP_DIR="${PROJECT_ROOT}/build/.onnxruntime-android-download"
 
 AAR_URL="https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/${ORT_VERSION}/onnxruntime-android-${ORT_VERSION}.aar"

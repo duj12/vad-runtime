@@ -140,25 +140,29 @@ adb shell getprop ro.product.cpu.abi   # 期望 arm64-v8a
 
 **不能**使用 `onnxruntime-linux-aarch64-*.tgz`：那是 **glibc Linux** 库，在 Android **bionic** 上会加载失败或崩溃。
 
-### 方式 A：一键脚本（推荐）
+仓库已内置从 AAR 解出的 Android 依赖，**默认无需下载**：
 
-在项目根目录执行：
+```
+third_party/onnxruntime/android/
+├── include/                          # onnxruntime_cxx_api.h 等
+└── lib/
+    ├── arm64-v8a/libonnxruntime.so
+    └── armeabi-v7a/libonnxruntime.so
+```
+
+### 方式 A：直接使用仓库内置依赖（推荐）
+
+无需任何操作，CMake 会自动选择 `third_party/onnxruntime/android`。
+
+### 方式 B：重新生成（例如需要 x86_64 模拟器 ABI）
 
 ```bash
 bash tools/setup_onnxruntime_android.sh
 ```
 
-生成目录：
+该脚本会从 Maven 下载 AAR 并解压到同一目录（覆盖已有文件）。
 
-```
-third_party/onnxruntime-android/
-├── include/                    # onnxruntime_cxx_api.h 等
-└── lib/
-    └── arm64-v8a/
-        └── libonnxruntime.so
-```
-
-### 方式 B：手动下载 AAR
+### 方式 C：手动下载 AAR
 
 ```bash
 # 在仓库根目录执行（下面命令均假设已 cd 到 vad-runtime 根目录）
@@ -166,12 +170,12 @@ ORT_VER=1.16.3
 wget https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/${ORT_VER}/onnxruntime-android-${ORT_VER}.aar
 mkdir -p build/.ort-aar && unzip -q onnxruntime-android-${ORT_VER}.aar -d build/.ort-aar
 
-mkdir -p third_party/onnxruntime-android/include third_party/onnxruntime-android/lib/arm64-v8a
-cp -a build/.ort-aar/headers/. third_party/onnxruntime-android/include/
-cp build/.ort-aar/jni/arm64-v8a/libonnxruntime.so third_party/onnxruntime-android/lib/arm64-v8a/
+mkdir -p third_party/onnxruntime/android/include third_party/onnxruntime/android/lib/arm64-v8a
+cp -a build/.ort-aar/headers/. third_party/onnxruntime/android/include/
+cp build/.ort-aar/jni/arm64-v8a/libonnxruntime.so third_party/onnxruntime/android/lib/arm64-v8a/
 ```
 
-与桌面版 `third_party/onnxruntime/`（Linux x64/aarch64）**分开存放**，避免混用。
+与桌面版 `third_party/onnxruntime/linux-{x86_64,aarch64}/` 放在同一父目录、按平台区分，避免混用。
 
 ## 3. 模型文件准备
 
@@ -233,7 +237,7 @@ cmake .. \
 make -j$(nproc)
 ```
 
-> 一般无需 `-DONNXRUNTIME_DIR`，默认使用 `third_party/onnxruntime-android/`。勿使用占位路径 `/path/to/vad-runtime`。
+> 一般无需 `-DONNXRUNTIME_DIR`，默认使用 `third_party/onnxruntime/android/`。勿使用占位路径 `/path/to/vad-runtime`。
 
 产物（在 `build-android/`）：
 
@@ -269,7 +273,7 @@ adb shell mkdir -p /data/local/tmp/vad/model
 
 adb push $BUILD/vad_example_onnx /data/local/tmp/vad/
 adb push $BUILD/libfsmn_vad.so /data/local/tmp/vad/
-adb push $VAD_ROOT/third_party/onnxruntime-android/lib/arm64-v8a/libonnxruntime.so /data/local/tmp/vad/
+adb push $VAD_ROOT/third_party/onnxruntime/android/lib/arm64-v8a/libonnxruntime.so /data/local/tmp/vad/
 adb push $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so /data/local/tmp/vad/
 
 adb push $VAD_ROOT/model/ /data/local/tmp/vad/model/
@@ -318,7 +322,7 @@ adb shell getprop ro.product.cpu.abi
 adb shell file /data/local/tmp/vad/vad_example_onnx
 
 # 查看依赖（在主机上对 push 前的 .so）
-readelf -d third_party/onnxruntime-android/lib/arm64-v8a/libonnxruntime.so | grep NEEDED
+readelf -d third_party/onnxruntime/android/lib/arm64-v8a/libonnxruntime.so | grep NEEDED
 
 # 拉取目录排查
 adb pull /data/local/tmp/vad ./vad-device-copy

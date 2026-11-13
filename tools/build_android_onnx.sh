@@ -13,7 +13,7 @@ ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-21}"
 JOBS="${JOBS:-$(nproc)}"
 
 TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake"
-ORT_SO="${PROJECT_ROOT}/third_party/onnxruntime-android/lib/${ANDROID_ABI}/libonnxruntime.so"
+ORT_SO="${PROJECT_ROOT}/third_party/onnxruntime/android/lib/${ANDROID_ABI}/libonnxruntime.so"
 
 if [[ ! -f "${TOOLCHAIN_FILE}" ]]; then
     echo "Error: NDK toolchain not found: ${TOOLCHAIN_FILE}" >&2
