@@ -31,7 +31,7 @@ vad-runtime/
 │       ├── linux-x86_64/   #   Linux x86_64
 │       ├── linux-aarch64/  #   Linux aarch64（Jetson 等）
 │       └── android/        #   Android arm64-v8a / armeabi-v7a
-├── prebuilt/              # 各平台预编译 libfsmn_vad.so（可直接取用）
+├── prebuilt/              # 各平台预编译 libfsmn_vad.so（linux-x86_64/aarch64、android-arm64-v8a）
 ├── model/                 # 模型文件
 │   ├── model_quant.onnx   # ONNX量化模型
 │   ├── am.mvn             # CMVN归一化参数（Kaldi文本格式）

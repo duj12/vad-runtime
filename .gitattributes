@@ -1,3 +1,10 @@
+# 构建相关文本文件统一 LF：避免 Windows 检出成 CRLF 后，
+# 到 Linux 上 bash 报 "pipefail: invalid option name"、make 解析失败
+Makefile            text eol=lf
+*.sh                text eol=lf
+*.cmake             text eol=lf
+CMakeLists.txt      text eol=lf
+
 # 二进制文件禁止换行转换，避免 Windows 检出时损坏
 *.so     binary
 *.so.*   binary
